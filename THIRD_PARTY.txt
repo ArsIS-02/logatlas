@@ -1,0 +1,6 @@
+Сторонние компоненты, входящие в LogAtlas:
+- d3 7.9.0 — ISC License, https://github.com/d3/d3
+- d3-sankey 0.12.3 — BSD-3-Clause, https://github.com/d3/d3-sankey
+- Inter — SIL Open Font License 1.1, https://rsms.me/inter/
+- DejaVu Sans Mono — Bitstream Vera Fonts License, https://dejavu-fonts.github.io/
+Устанавливаются при сборке образа: Starlette, Uvicorn, python-multipart (BSD), orjson (Apache-2.0/MIT), evtx / python-evtx (MIT/Apache-2.0).

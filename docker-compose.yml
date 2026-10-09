@@ -1,0 +1,15 @@
+services:
+  logatlas:
+    build: .
+    image: logatlas:1.0
+    container_name: logatlas
+    restart: unless-stopped
+    # процесс работает от имени вашего пользователя, чтобы файлы в ./data принадлежали вам
+    user: "${LOGATLAS_UID:-1000}:${LOGATLAS_GID:-1000}"
+    ports:
+      - "${LOGATLAS_PORT:-8484}:8484"
+    volumes:
+      # :Z — метка SELinux (в РЕД ОС SELinux обычно включён)
+      - ./data:/data:Z
+    environment:
+      - TZ=UTC   # часовой пояс контейнера; на время в журналах не влияет

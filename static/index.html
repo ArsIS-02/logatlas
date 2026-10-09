@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="ru" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LogAtlas</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23162230'/%3E%3Cpath d='M6 22h3v-6H6zm5 0h3V9h-3zm5 0h3v-9h-3zm5 0h3v-4h-3z' fill='%238cc3d4'/%3E%3Cpath d='M5 25h22' stroke='%23d4b06a' stroke-width='2'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/css/app.css">
+<script>
+  try { const t = localStorage.getItem('la-theme'); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+</script>
+</head>
+<body>
+<div class="app">
+  <aside class="side" id="side">
+    <a class="brand" href="#/">
+      <svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><rect width="32" height="32" rx="8" class="brand-bg"/><path d="M6 22h3v-6H6zm5 0h3V9h-3zm5 0h3v-9h-3zm5 0h3v-4h-3z" class="brand-bars"/><path d="M5 25h22" class="brand-line"/></svg>
+      <span>LogAtlas</span>
+    </a>
+    <nav class="platforms" id="platforms" aria-label="Платформы"></nav>
+    <div class="side-cases" id="side-cases"></div>
+    <div class="side-foot">
+      <button class="btn ghost small" id="theme-btn" type="button" title="Сменить тему">
+        <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M10 3a7 7 0 1 0 7 7 5.5 5.5 0 0 1-7-7z" fill="currentColor"/></svg>
+        <span>Тема</span>
+      </button>
+      <span class="ver" id="ver"></span>
+    </div>
+  </aside>
+  <div class="main">
+    <header class="top" id="top"></header>
+    <main id="view" class="view" tabindex="-1"></main>
+  </div>
+</div>
+<div class="drawer" id="drawer" aria-hidden="true">
+  <div class="drawer-scrim" data-close></div>
+  <section class="drawer-panel" role="dialog" aria-modal="true" aria-labelledby="drawer-title">
+    <div class="drawer-body" id="drawer-body"></div>
+  </section>
+</div>
+<div class="tooltip" id="tooltip" role="tooltip"></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script src="/static/vendor/d3.min.js"></script>
+<script src="/static/vendor/d3-sankey.min.js"></script>
+<script type="module" src="/static/js/app.js"></script>
+</body>
+</html>

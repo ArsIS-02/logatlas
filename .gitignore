@@ -1,0 +1,9 @@
+# данные дел и загрузки
+/data/
+# Python
+__pycache__/
+*.py[cod]
+# системное
+.DS_Store
+Thumbs.db
+*.swp
