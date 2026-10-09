@@ -69,7 +69,7 @@
 ## Быстрый старт
 
 ```bash
-git clone https://github.com/OWNER/logatlas.git
+git clone https://github.com/ArsIS-02/logatlas.git
 cd logatlas
 mkdir -p data/inbox            # до первого запуска, чтобы папка принадлежала вам
 docker compose up -d --build
