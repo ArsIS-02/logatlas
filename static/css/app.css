@@ -113,6 +113,7 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; padding: 0 1
   display: inline-flex; align-items: center; justify-content: center; gap: 4px; border: 1px solid transparent;
   border-radius: var(--r-sm); background: transparent; color: var(--muted); font: inherit; font-size: 11.5px; cursor: pointer; opacity: 0;
 }
+.side-case .case-link.on + .case-del { opacity: .55; }
 .side-case:hover .case-del, .case-del:focus-visible, .case-del.armed { opacity: 1; }
 .case-del:hover { color: var(--s-critical); background: var(--panel); border-color: var(--line-2); }
 .case-del.armed { color: var(--s-critical); background: var(--panel); border-color: var(--s-critical); }

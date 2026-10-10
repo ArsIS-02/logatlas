@@ -30,6 +30,16 @@ STATIC = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
 log = logging.getLogger("logatlas")
 
 
+class NoCacheStatic(StaticFiles):
+    """Статика с проверкой свежести при каждой загрузке страницы: после обновления LogAtlas
+    браузер сразу берёт новые JS и CSS (неизменившиеся файлы отдаются ответом 304)."""
+
+    async def get_response(self, path, scope):
+        resp = await super().get_response(path, scope)
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+
 class J(JSONResponse):
     def render(self, content):
         try:
@@ -400,7 +410,7 @@ routes = [
     Route("/api/cases/{cid}/ioc", ioc, methods=["POST"]),
     Route("/api/inbox", inbox),
     Route("/api/inbox/import", inbox_import, methods=["POST"]),
-    Mount("/static", StaticFiles(directory=STATIC), name="static"),
+    Mount("/static", NoCacheStatic(directory=STATIC), name="static"),
 ]
 
 
