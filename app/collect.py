@@ -34,7 +34,10 @@ DEFAULT_USER = "logatlas-collect"
 OSES = ("linux", "macos", "windows")
 
 RE_ADDR = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,252}")
-RE_USER = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._-]{0,63}")
+# Имя учётной записи: буквы любого алфавита (в т.ч. «администратор»), цифры, «.», «_», «-»,
+# пробелы внутри (локальные имена Windows); для домена — «ДОМЕН\имя» или «имя@домен».
+# Имя уходит в ssh отдельным аргументом (-l), без оболочки, поэтому эти символы безопасны.
+RE_USER = re.compile(r"(?:\w[\w.-]{0,63}\\)?\w(?:[\w. -]{0,62}[\w.-])?(?:@\w[\w.-]{0,252})?")
 RE_SRC = re.compile(r"[a-z][a-z0-9_-]{0,31}")
 
 _lock = threading.RLock()
@@ -122,7 +125,8 @@ def _clean(body: dict, old: dict | None = None) -> dict:
             raise ValueError("Укажите учётную запись Windows, к которой скрипт подготовки добавил ключ панели")
         user = DEFAULT_USER
     if not RE_USER.fullmatch(user):
-        raise ValueError("Пользователь: латинские буквы, цифры, «.», «_», «-»")
+        raise ValueError("Пользователь: буквы (можно русские), цифры, «.», «_», «-», пробел внутри; "
+                         "доменная учётная запись — «ДОМЕН\\имя» или «имя@домен»")
     note = str(body.get("note", old.get("note", "")) or "").strip()[:200]
     return {"name": name or addr, "address": addr, "port": port, "os": os_, "user": user, "note": note}
 
