@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import shutil
+import threading
 import time
 import uuid
 
@@ -25,7 +26,7 @@ from .parsers import SUPPORTED
 from .parsers.base import CATEGORIES
 from .timeutil import fmt_tz, ms_to_str
 
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 STATIC = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
 log = logging.getLogger("logatlas")
 
@@ -222,6 +223,8 @@ _OV_CACHE: dict = {}
 @_with_case
 def overview(req, con, case):
     t0, t1 = _rng(req)
+    if t0 is None and t1 is None:
+        return J(analytics.stored_overview(con, case["id"]))
     key = (case["id"], case["updated"], t0, t1)
     if key not in _OV_CACHE:
         if len(_OV_CACHE) > 64:
@@ -538,10 +541,35 @@ routes = [
 ]
 
 
+def _warm_overviews():
+    """Фоном готовит сохранённую сводку для сборов, разобранных до её появления."""
+    lg = logging.getLogger("logatlas")
+    time.sleep(5)
+    with db.catalog() as cat:
+        ready = [(r[0], r[1]) for r in cat.execute(
+            "SELECT id, events FROM cases WHERE status='ready' AND events > 0 ORDER BY created DESC")]
+    for cid, events in ready:
+        c = {"id": cid, "events": events}
+        try:
+            con = db.case_db(c["id"])
+        except FileNotFoundError:
+            continue
+        try:
+            if analytics.stored_overview(con, c["id"], compute=False) is None:
+                t = time.time()
+                analytics.stored_overview(con, c["id"])
+                lg.info("overview for case %s (%s events) prepared in %.0fs", c["id"], c["events"], time.time() - t)
+        except Exception:  # noqa: BLE001
+            lg.exception("cannot prepare overview for case %s", c["id"])
+        finally:
+            con.close()
+
+
 def create_app():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     db.init()
     ingest.worker()
+    threading.Thread(target=_warm_overviews, daemon=True, name="overview-warm").start()
     try:
         collect.ensure_key()
     except Exception:  # noqa: BLE001

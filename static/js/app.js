@@ -303,7 +303,16 @@ async function route() {
     return;
   }
   const caseChanged = !prev || prev.id !== r.id;
-  if (caseChanged) mount(view, h`<div class="loading"><span class="spinner"></span></div>`);
+  if (caseChanged) {
+    mount(view, h`<div class="loading"><span class="spinner"></span><p class="loading-t">Открываю сбор…</p></div>`);
+    setTimeout(() => {
+      const t = view.querySelector('.loading-t');
+      if (t && seq === S.renderSeq) {
+        t.textContent = 'Готовлю сводку по сбору. Для сбора из миллионов событий при первом открытии это может занять '
+          + 'несколько минут — потом он будет открываться сразу. Страницу можно не закрывать.';
+      }
+    }, 3000);
+  }
   try {
     await loadCase(r.id, caseChanged);
   } catch (e) {

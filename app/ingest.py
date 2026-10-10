@@ -20,7 +20,7 @@ import zipfile
 from collections import Counter
 from datetime import datetime, timedelta
 
-from . import db, detections
+from . import analytics, db, detections
 from .parsers import choose
 from .parsers.base import Ctx, Source
 
@@ -214,6 +214,7 @@ def run_ingest(case_id, paths, tz_default, tz_mode):
     tmpdir = tempfile.mkdtemp(dir=db.TMP_DIR)
     con = db.case_db(case_id, write=True)
     con.execute("PRAGMA synchronous=OFF")
+    analytics.drop_overview(con)        # сводка пересчитается в конце разбора
     tz_votes = Counter()
     host_votes = Counter()
     notes = []
@@ -322,6 +323,11 @@ def run_ingest(case_id, paths, tz_default, tz_mode):
         nf = detections.run(con)
         con.execute("ANALYZE")
         con.commit()
+        db.set_case(case_id, progress=0.97, stage="Сводка для обзора")
+        db.add_log(case_id, "info", "Сводка для вкладки «Обзор»")
+        t_ov = time.time()
+        analytics.save_overview(con, analytics.overview(con))
+        log.info("case %s overview in %.1fs", case_id, time.time() - t_ov)
 
         tot = con.execute("SELECT count(*), min(t), max(t) FROM events").fetchone()
         with db.catalog() as c:

@@ -1,7 +1,10 @@
 """Запросы для дашбордов, хронологии, сущностей, находок и поиска."""
 from __future__ import annotations
 
+import json
 import re
+import sqlite3
+import threading
 
 from . import detections, search
 from .parsers.base import CATEGORIES
@@ -40,14 +43,42 @@ def bounds(con, t0, t1):
 
 # ---------------------------------------------------------------------------
 def overview(con, t0=None, t1=None):
+    """Сводка для вкладки «Обзор» и ленты времени.
+
+    На больших сборах (миллионы событий) каждый полный проход по таблице стоит секунды,
+    поэтому счётчики по источникам, уровням, категориям и гистограмма считаются одним
+    проходом, а действия и поток «источник → категория → действие» — вторым.
+    """
     w, p = range_clause(t0, t1)
     tmin, tmax, total = bounds(con, t0, t1)
     out = {"total": total, "t_min": tmin, "t_max": tmax}
     if not total:
         return out
-    out["categorized"] = con.execute(f"SELECT count(*) FROM events WHERE category IS NOT NULL AND {w}", p).fetchone()[0]
-    out["sources"] = [dict(r) for r in con.execute(
-        f"SELECT source, count(*) n FROM events WHERE {w} GROUP BY source ORDER BY n DESC", p)]
+
+    span = max(tmax - tmin, 1000)
+    b = pick_bucket(span)
+    start = (tmin // b) * b
+    nb = int((tmax - start) // b) + 1
+    total_series = [0] * nb
+    cat_series = {c: [0] * nb for c in CATEGORIES}
+    sources, levels, categories = {}, {}, {}
+    categorized = 0
+    for k, src, lvl, cat, n in con.execute(
+            f"SELECT (t - ?) / ? AS k, source, level, category, count(*) FROM events WHERE {w} "
+            f"GROUP BY k, source, level, category", [start, b] + p):
+        k = int(k)
+        if 0 <= k < nb:
+            total_series[k] += n
+        sources[src] = sources.get(src, 0) + n
+        lv = lvl or "info"
+        levels[lv] = levels.get(lv, 0) + n
+        if cat is not None:
+            categorized += n
+            categories[cat] = categories.get(cat, 0) + n
+            if cat in cat_series and 0 <= k < nb:
+                cat_series[cat][k] += n
+    out["categorized"] = categorized
+    out["sources"] = [{"source": s_, "n": n} for s_, n in sorted(sources.items(), key=lambda x: -x[1])]
     out["n_processes"] = con.execute(f"SELECT count(DISTINCT process) FROM events WHERE {w}", p).fetchone()[0]
     out["hosts"] = [r[0] for r in con.execute(
         f"SELECT host, count(*) n FROM events WHERE host IS NOT NULL AND host != 'localhost' AND {w} "
@@ -55,46 +86,85 @@ def overview(con, t0=None, t1=None):
     out["users"] = [r[0] for r in con.execute(
         f"SELECT user, count(*) n FROM events WHERE category='access' AND user IS NOT NULL AND user NOT IN ('<private>','0','-') AND user GLOB '*[^0-9]*' AND {w} "
         f"GROUP BY user ORDER BY n DESC LIMIT 8", p)]
-    out["categories"] = {r[0]: r[1] for r in con.execute(
-        f"SELECT category, count(*) FROM events WHERE category IS NOT NULL AND {w} GROUP BY category", p)}
-    out["levels"] = {r[0] or "info": r[1] for r in con.execute(
-        f"SELECT level, count(*) FROM events WHERE {w} GROUP BY level", p)}
-
-    span = max(tmax - tmin, 1000)
-    b = pick_bucket(span)
+    out["categories"] = categories
+    out["levels"] = levels
     out["bucket"] = b
-    start = (tmin // b) * b
     out["hist_start"] = start
-    nb = int((tmax - start) // b) + 1
-    total_series = [0] * nb
-    for k, n in con.execute(f"SELECT (t - ?) / ? AS k, count(*) FROM events WHERE {w} GROUP BY k", [start, b] + p):
-        if 0 <= k < nb:
-            total_series[int(k)] = n
-    cat_series = {c: [0] * nb for c in CATEGORIES}
-    for k, c, n in con.execute(
-            f"SELECT (t - ?) / ? AS k, category, count(*) FROM events WHERE category IS NOT NULL AND {w} "
-            f"GROUP BY k, category", [start, b] + p):
-        if c in cat_series and 0 <= k < nb:
-            cat_series[c][int(k)] = n
     out["hist_total"] = total_series
     out["hist_cat"] = cat_series
 
     out["top_processes"] = [dict(r) for r in con.execute(
         f"SELECT process AS name, count(*) n FROM events WHERE process IS NOT NULL AND {w} "
         f"GROUP BY process ORDER BY n DESC LIMIT 12", p)]
-    out["top_actions"] = [dict(r) for r in con.execute(
-        f"SELECT action AS name, category, count(*) n FROM events WHERE category IS NOT NULL AND {w} "
-        f"GROUP BY action, category ORDER BY n DESC LIMIT 12", p)]
-    out["sankey"] = sankey(con, w, p)
+    flows = con.execute(
+        f"SELECT source, category, action, count(*) n FROM events WHERE category IS NOT NULL AND {w} "
+        f"GROUP BY source, category, action", p).fetchall()
+    acts = {}
+    for _s, c, a, n in flows:
+        acts[(a, c)] = acts.get((a, c), 0) + n
+    out["top_actions"] = [{"name": a, "category": c, "n": n}
+                          for (a, c), n in sorted(acts.items(), key=lambda x: -x[1])[:12]]
+    out["sankey"] = sankey_from(flows)
     out["findings"] = findings_summary(con, t0, t1)
     out["heatmap"] = heatmap(con, "access", t0, t1)
     return out
+
+
+# Сводка за весь период хранится в самой базе сбора (таблица kv): на сборе из миллионов
+# событий её расчёт занимает минуты, а открывать сбор хочется сразу. Считается в конце
+# разбора; для сборов, разобранных раньше, — при первом открытии или фоном после запуска.
+OV_KEY = "overview:1"
+_ov_guard = threading.Lock()
+_ov_locks: dict = {}
+
+
+def _ov_lock(case_id):
+    with _ov_guard:
+        return _ov_locks.setdefault(case_id, threading.Lock())
+
+
+def _ov_read(con):
+    try:
+        r = con.execute("SELECT v FROM kv WHERE k=?", (OV_KEY,)).fetchone()
+    except sqlite3.OperationalError:
+        return None
+    return json.loads(r[0]) if r else None
+
+
+def save_overview(con, ov):
+    con.execute("CREATE TABLE IF NOT EXISTS kv(k TEXT PRIMARY KEY, v TEXT)")
+    con.execute("INSERT OR REPLACE INTO kv(k, v) VALUES (?, ?)", (OV_KEY, json.dumps(ov, ensure_ascii=False)))
+    con.commit()
+
+
+def drop_overview(con):
+    try:
+        con.execute("DELETE FROM kv WHERE k=?", (OV_KEY,))
+        con.commit()
+    except sqlite3.OperationalError:
+        pass
+
+
+def stored_overview(con, case_id, compute=True):
+    ov = _ov_read(con)
+    if ov is not None or not compute:
+        return ov
+    with _ov_lock(case_id):
+        ov = _ov_read(con)          # пока ждали, мог посчитать другой запрос
+        if ov is None:
+            ov = overview(con)
+            save_overview(con, ov)
+    return ov
 
 
 def sankey(con, w, p, per_cat=4):
     rows = con.execute(
         f"SELECT source, category, action, count(*) n FROM events WHERE category IS NOT NULL AND {w} "
         f"GROUP BY source, category, action", p).fetchall()
+    return sankey_from(rows, per_cat)
+
+
+def sankey_from(rows, per_cat=4):
     # оставляем топ действий в каждой категории
     by_cat = {}
     for s, c, a, n in rows:
