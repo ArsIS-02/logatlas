@@ -95,19 +95,20 @@ export async function renderHosts(view) {
 
     <section class="panel" style="margin-top:18px">
       <div class="panel-h"><h2>Подготовка хоста</h2><span class="sub">один раз на каждый хост</span></div>
-      <p class="ink2 setup-p">Скрипт создаёт на хосте пользователя <span class="mono">${info.user}</span> без пароля и кладёт ему ключ этой панели. Войти с ключом можно только с адреса панели, и только чтобы запустить сбор журналов: терминала и других команд нет. Скрипт сбора только читает журналы.</p>
+      <p class="ink2 setup-p">Скрипт кладёт на хост ключ этой панели. Войти с ключом можно только с адреса панели и только чтобы запустить сбор журналов: терминала и других команд нет. Скрипт сбора только читает журналы.</p>
       <div class="setup-grid">
         <div class="setup-os">
           <h3>${raw(platIcon('linux'))} Linux и ${raw(platIcon('macos'))} macOS</h3>
-          <p class="muted small-t">В терминале хоста, под пользователем с правом sudo:</p>
+          <p class="muted small-t">В терминале хоста, под пользователем с правом sudo. Создаётся системный пользователь <span class="mono">${info.user}</span> без пароля:</p>
           <div class="cmdline"><code>${info.commands.unix}</code>${copyBtn(info.commands.unix)}</div>
           <p class="muted small-t">На macOS заранее включите «Удалённый вход»: Системные настройки → Основные → Общий доступ.</p>
         </div>
         <div class="setup-os">
           <h3>${raw(platIcon('windows'))} Windows 10/11</h3>
           <p class="muted small-t">1. Скачайте скрипт на этот хост: <a class="btn small" href="${info.commands.windows_url}" download="logatlas-setup.ps1">logatlas-setup.ps1</a></p>
-          <p class="muted small-t">2. В PowerShell от имени администратора перейдите в папку с файлом (<span class="mono">cd</span>) и выполните — скрипт включит встроенный OpenSSH Server, если он выключен:</p>
+          <p class="muted small-t">2. В PowerShell от имени администратора перейдите в папку с файлом (<span class="mono">cd</span>) и выполните. Скрипт включит встроенный OpenSSH Server и добавит ключ панели к вашей учётной записи — новых пользователей не создаёт, ваш пароль и ваши ключи не трогает:</p>
           <div class="cmdline"><code>${info.commands.windows}</code>${copyBtn(info.commands.windows)}</div>
+          <p class="muted small-t">В карточке хоста укажите имя этой учётной записи — скрипт напишет его в конце. Отдельный пользователь вместо вашей записи: добавьте к команде <span class="mono">-CreateUser</span>.</p>
         </div>
       </div>
       <details class="setup-more">
@@ -132,11 +133,18 @@ export async function renderHosts(view) {
       <label class="lbl">Адрес (имя или IP)<input class="field" id="hf-addr" value="${v.address}" placeholder="192.168.1.20" required></label>
       <label class="lbl">Порт SSH<input class="field" id="hf-port" type="number" min="1" max="65535" value="${v.port}" style="width:90px"></label>
       <label class="lbl">Система<select class="field" id="hf-os">${Object.entries(OS_NAME).map(([k, n]) => h`<option value="${k}" ${v.os === k ? raw('selected') : ''}>${n}</option>`)}</select></label>
-      <label class="lbl">Пользователь<input class="field" id="hf-user" value="${v.user}" style="width:150px"></label>
+      <label class="lbl">Пользователь<input class="field" id="hf-user" value="${v.user}" placeholder="${v.os === 'windows' ? 'ваша учётная запись' : info.user}" style="width:170px"></label>
       <label class="lbl grow">Заметка<input class="field" id="hf-note" value="${v.note || ''}"></label>
       <div class="btn-row"><button class="btn primary" type="button" id="hf-save">${x ? 'Сохранить' : 'Добавить'}</button><button class="btn ghost" type="button" id="hf-cancel">Отмена</button></div>
     </div>`);
     $('#hf-addr').focus();
+    $('#hf-os').addEventListener('change', (e) => {
+      const u = $('#hf-user');
+      const win = e.target.value === 'windows';
+      if (win && u.value === info.user) u.value = '';
+      if (!win && !u.value) u.value = info.user;
+      u.placeholder = win ? 'ваша учётная запись' : info.user;
+    });
     $('#hf-cancel').addEventListener('click', () => form.classList.add('hidden'));
     $('#hf-save').addEventListener('click', async () => {
       const body = {

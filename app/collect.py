@@ -116,7 +116,11 @@ def _clean(body: dict, old: dict | None = None) -> dict:
     os_ = str(body.get("os", old.get("os", "linux")) or "linux")
     if os_ not in OSES:
         raise ValueError("Система: linux, macos или windows")
-    user = str(body.get("user", old.get("user", DEFAULT_USER)) or DEFAULT_USER).strip()
+    user = str(body.get("user", old.get("user", "")) or "").strip()
+    if not user:
+        if os_ == "windows":
+            raise ValueError("Укажите учётную запись Windows, к которой скрипт подготовки добавил ключ панели")
+        user = DEFAULT_USER
     if not RE_USER.fullmatch(user):
         raise ValueError("Пользователь: латинские буквы, цифры, «.», «_», «-»")
     note = str(body.get("note", old.get("note", "")) or "").strip()[:200]
