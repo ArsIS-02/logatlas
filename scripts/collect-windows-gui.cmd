@@ -52,18 +52,19 @@ if (-not $isAdmin) {
 # ---------------------------------------------------------------- настройки
 $cfgDir = Join-Path $env:APPDATA 'LogAtlas'
 $cfgFile = Join-Path $cfgDir 'collect-windows.json'
-$cfg = @{ OutDir = [Environment]::GetFolderPath('Desktop'); Url = [string]$env:LOGATLAS_URL }
+$cfg = @{ OutDir = [Environment]::GetFolderPath('Desktop'); Url = [string]$env:LOGATLAS_URL; Period = 1 }
 try {
   if (Test-Path -LiteralPath $cfgFile) {
     $j = [IO.File]::ReadAllText($cfgFile) | ConvertFrom-Json
     if ($j.OutDir -and (Test-Path -LiteralPath $j.OutDir)) { $cfg.OutDir = [string]$j.OutDir }
     if ($j.Url) { $cfg.Url = [string]$j.Url }
+    if ($null -ne $j.Period -and [int]$j.Period -ge 0 -and [int]$j.Period -le 5) { $cfg.Period = [int]$j.Period }
   }
 } catch { }
 function Save-Cfg {
   try {
     New-Item -ItemType Directory -Force -Path $cfgDir | Out-Null
-    [IO.File]::WriteAllText($cfgFile, (@{ OutDir = $cfg.OutDir; Url = $cfg.Url } | ConvertTo-Json))
+    [IO.File]::WriteAllText($cfgFile, (@{ OutDir = $cfg.OutDir; Url = $cfg.Url; Period = $cfg.Period } | ConvertTo-Json))
   } catch { }
 }
 
@@ -105,14 +106,14 @@ $tmp = Join-Path $env:TEMP ('logatlas_' + $stamp)
 # Состояние окна и фоновой задачи (хэш-таблицы — чтобы обработчики событий меняли общие значения)
 $st = @{ Phase = 'intro'; Items = @(); Zip = ''; Sw = New-Object System.Diagnostics.Stopwatch; Ps = $null; Handle = $null }
 $sync = [hashtable]::Synchronized(@{
-  Phase = 'idle'; Index = -1; Done = 0; Saved = 0; Bytes = 0; ZipSize = 0; Error = ''; Cancel = $false; Proc = $null
+  Phase = 'idle'; Index = -1; Done = 0; Saved = 0; Bytes = 0; Events = 0; ZipSize = 0; Error = ''; Cancel = $false; Proc = $null
   Status = [hashtable]::Synchronized(@{}); State = [hashtable]::Synchronized(@{})
 })
 
 # ---------------------------------------------------------------- фоновая выгрузка
 # WORKER-BEGIN
 $worker = {
-  param($sync, [string[]]$names, [string]$tmp, [string]$zip)
+  param($sync, [string[]]$names, [string]$tmp, [string]$zip, [string]$query)
   function Format-Size([double]$b) {
     if ($b -ge 1GB) { return '{0:N1} ГБ' -f ($b / 1GB) }
     if ($b -ge 1MB) { return '{0:N1} МБ' -f ($b / 1MB) }
@@ -131,7 +132,8 @@ $worker = {
       $dest = Join-Path $tmp (($names[$k] -replace '[\\/:*?"<>| ]', '_') + '.evtx')
       $psi = New-Object System.Diagnostics.ProcessStartInfo
       $psi.FileName = 'wevtutil.exe'
-      $psi.Arguments = 'epl "{0}" "{1}" /ow:true' -f $names[$k], $dest
+      if ($query) { $psi.Arguments = 'epl "{0}" "{1}" "/q:{2}" /ow:true' -f $names[$k], $dest, $query }
+      else { $psi.Arguments = 'epl "{0}" "{1}" /ow:true' -f $names[$k], $dest }
       $psi.UseShellExecute = $false
       $psi.CreateNoWindow = $true
       $psi.RedirectStandardOutput = $true
@@ -147,10 +149,28 @@ $worker = {
       if ($sync.Cancel) { break }
       if ($p.ExitCode -eq 0 -and (Test-Path -LiteralPath $dest)) {
         $len = (Get-Item -LiteralPath $dest).Length
-        $sync.Bytes += $len
-        $sync.Saved++
-        $sync.State[$k] = 'ok'
-        $sync.Status[$k] = 'готово · ' + (Format-Size $len)
+        # сколько событий попало в файл
+        $count = $null
+        try {
+          $gi = New-Object System.Diagnostics.ProcessStartInfo
+          $gi.FileName = 'wevtutil.exe'
+          $gi.Arguments = 'gli "{0}" /lf:true' -f $dest
+          $gi.UseShellExecute = $false; $gi.CreateNoWindow = $true; $gi.RedirectStandardOutput = $true
+          $gp = [System.Diagnostics.Process]::Start($gi)
+          $gout = $gp.StandardOutput.ReadToEnd(); $gp.WaitForExit()
+          if ($gout -match 'numberOfLogRecords:\s*(\d+)') { $count = [long]$Matches[1] }
+        } catch { }
+        if ($query -and $count -eq 0) {
+          Remove-Item -LiteralPath $dest -Force -ErrorAction SilentlyContinue
+          $sync.State[$k] = 'empty'
+          $sync.Status[$k] = 'нет событий за период'
+        } else {
+          $sync.Bytes += $len
+          $sync.Saved++
+          $sync.Events += $(if ($count) { $count } else { 0 })
+          $sync.State[$k] = 'ok'
+          $sync.Status[$k] = 'готово · ' + $(if ($null -ne $count) { $count.ToString('N0') + ' соб. · ' } else { '' }) + (Format-Size $len)
+        }
       } else {
         $msg = (($err + ' ' + $outTask.Result) -replace '\s+', ' ').Trim()
         if (-not $msg) { $msg = 'код ' + $p.ExitCode }
@@ -160,7 +180,11 @@ $worker = {
       $sync.Done = $k + 1
     }
     if ($sync.Cancel) { $final = 'cancelled'; return }
-    if ($sync.Saved -eq 0) { $sync.Error = 'Не удалось выгрузить ни одного журнала.'; return }
+    if ($sync.Saved -eq 0) {
+      if (@($sync.State.Values | Where-Object { $_ -eq 'empty' }).Count) { $sync.Error = 'За выбранный период в журналах нет событий. Выберите период шире.' }
+      else { $sync.Error = 'Не удалось выгрузить ни одного журнала.' }
+      return
+    }
     $sync.Phase = 'zip'
     [System.IO.Compression.ZipFile]::CreateFromDirectory($tmp, $zip, [System.IO.Compression.CompressionLevel]::Optimal, $false)
     $sync.ZipSize = (Get-Item -LiteralPath $zip).Length
@@ -189,7 +213,7 @@ $form.SuspendLayout()
 $form.AutoScaleDimensions = New-Object System.Drawing.SizeF(96, 96)
 $form.AutoScaleMode = 'Dpi'
 $form.Text = $AppTitle
-$form.ClientSize = New-Object System.Drawing.Size(760, 600)
+$form.ClientSize = New-Object System.Drawing.Size(760, 640)
 $form.StartPosition = 'CenterScreen'
 $form.FormBorderStyle = 'FixedDialog'
 $form.MaximizeBox = $false
@@ -213,14 +237,24 @@ $lv.ShowItemToolTips = $true
 [void]$lv.Columns.Add('Статус', 186)
 
 $lblSum = New-Ctl Label 20 368 720 22
-$lblOut = New-Ctl Label 20 396 720 20 'Архив сохранится в папку:'
-$txtOut = New-Ctl TextBox 20 418 610 26 $cfg.OutDir
-$btnBrowse = New-Ctl Button 640 416 100 28 'Обзор…'
-$lblTemp = New-Ctl Label 20 450 720 20 ("Временные файлы: {0} — удаляются после упаковки" -f $tmp)
+$lblPeriod = New-Ctl Label 20 402 64 20 'Период:'
+$cmbPeriod = New-Ctl ComboBox 86 398 190 26
+$cmbPeriod.DropDownStyle = 'DropDownList'
+[void]$cmbPeriod.Items.AddRange([object[]]@('Последние 24 часа', 'Последние 3 дня', 'Последние 7 дней', 'Последние 30 дней', 'Всё время', 'Свой период'))
+$dtFrom = New-Ctl DateTimePicker 288 398 160 26
+$lblDash = New-Ctl Label 452 402 18 20 '—'
+$dtTo = New-Ctl DateTimePicker 472 398 160 26
+foreach ($d in @($dtFrom, $dtTo)) { $d.Format = 'Custom'; $d.CustomFormat = 'dd.MM.yyyy HH:mm' }
+$lblTz = New-Ctl Label 640 402 100 20 ('UTC' + (Get-Date -Format 'zzz'))
+$lblTz.ForeColor = $gray
+$lblOut = New-Ctl Label 20 436 720 20 'Архив сохранится в папку:'
+$txtOut = New-Ctl TextBox 20 458 610 26 $cfg.OutDir
+$btnBrowse = New-Ctl Button 640 456 100 28 'Обзор…'
+$lblTemp = New-Ctl Label 20 490 720 20 ("Временные файлы: {0} — удаляются после упаковки" -f $tmp)
 $lblTemp.ForeColor = $gray
 $lblTemp.AutoEllipsis = $true
-$pb = New-Ctl ProgressBar 20 482 720 18
-$lblStatus = New-Ctl Label 20 506 720 40 'Нажмите «Начать сбор». Обычно это занимает от нескольких секунд до пары минут.'
+$pb = New-Ctl ProgressBar 20 522 720 18
+$lblStatus = New-Ctl Label 20 546 720 40 'Нажмите «Начать сбор». Обычно это занимает от нескольких секунд до пары минут.'
 
 # элементы итогового экрана
 $lblNext = New-Ctl Label 20 380 720 82
@@ -230,11 +264,11 @@ $txtUrl = New-Ctl TextBox 130 467 500 26 $cfg.Url
 $btnOpen = New-Ctl Button 640 465 100 28 'Открыть'
 foreach ($c in @($lblUrl, $txtUrl, $btnOpen)) { $c.Visible = $false }
 
-$btnMain = New-Ctl Button 460 552 170 32 'Начать сбор'
-$btnClose = New-Ctl Button 640 552 100 32 'Отмена'
+$btnMain = New-Ctl Button 460 594 170 32 'Начать сбор'
+$btnClose = New-Ctl Button 640 594 100 32 'Отмена'
 $form.AcceptButton = $btnMain
 
-$form.Controls.AddRange(@($lblTitle, $lblInfo, $lv, $lblSum, $lblOut, $txtOut, $btnBrowse, $lblTemp, $pb, $lblStatus,
+$form.Controls.AddRange(@($lblTitle, $lblInfo, $lv, $lblSum, $lblPeriod, $cmbPeriod, $dtFrom, $lblDash, $dtTo, $lblTz, $lblOut, $txtOut, $btnBrowse, $lblTemp, $pb, $lblStatus,
                           $lblNext, $lblUrl, $txtUrl, $btnOpen, $btnMain, $btnClose))
 
 $avail = 0
@@ -257,14 +291,56 @@ foreach ($l in $logs) {
 }
 foreach ($it in $lv.Items) { if ($it.Tag.Exists) { $it.Checked = $true } }
 
+# Период: готовые варианты заполняют поля «с»/«по»; правка полей переключает на «Свой период»
+$PRESET_HOURS = @(24, 72, 168, 720)
+function Set-Preset {
+  $i = $cmbPeriod.SelectedIndex
+  $st.Filling = $true
+  if ($i -ge 0 -and $i -le 3) {
+    $now = Get-Date
+    $dtTo.Value = $now
+    $dtFrom.Value = $now.AddHours(-$PRESET_HOURS[$i])
+  }
+  $all = ($i -eq 4)
+  $dtFrom.Enabled = -not $all; $dtTo.Enabled = -not $all; $lblDash.Enabled = -not $all
+  $st.Filling = $false
+  Update-Sum
+}
+$cmbPeriod.Add_SelectedIndexChanged({ Set-Preset })
+foreach ($d in @($dtFrom, $dtTo)) {
+  $d.Add_ValueChanged({ if (-not $st.Filling -and $cmbPeriod.SelectedIndex -ne 5) { $st.Filling = $true; $cmbPeriod.SelectedIndex = 5; $st.Filling = $false }; Update-Sum })
+}
+function Get-Period {
+  # возвращает @{ From; To; Query; Text } по текущему выбору; From/To — местное время
+  $i = $cmbPeriod.SelectedIndex
+  if ($i -eq 4) { return @{ From = $null; To = $null; Query = ''; Text = 'всё время' } }
+  if ($i -ge 0 -and $i -le 3) { $to = Get-Date; $from = $to.AddHours(-$PRESET_HOURS[$i]) }
+  else { $from = $dtFrom.Value; $to = $dtTo.Value }
+  $f = $from.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss.000'Z'")
+  $t = $to.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:59.999'Z'")
+  return @{
+    From = $from; To = $to
+    Query = "*[System[TimeCreated[@SystemTime>='$f' and @SystemTime<='$t']]]"
+    Text = '{0:dd.MM.yyyy HH:mm} — {1:dd.MM.yyyy HH:mm} ({2})' -f $from, $to, $lblTz.Text
+  }
+}
+
 function Update-Sum {
   if ($st.Phase -ne 'intro') { return }
   $sel = @($lv.Items | Where-Object { $_.Checked })
   $bytes = 0
   foreach ($i in $sel) { $bytes += $i.Tag.Size; $i.SubItems[3].Text = 'будет собран' }
   foreach ($i in $lv.Items) { if ($i.Tag.Exists -and -not $i.Checked) { $i.SubItems[3].Text = 'пропустить' } }
-  $lblSum.Text = 'Выбрано журналов: {0} из {1} · объём до сжатия около {2}, архив будет заметно меньше' -f $sel.Count, $avail, (Format-Size $bytes)
-  $btnMain.Enabled = ($sel.Count -gt 0)
+  $badRange = ($cmbPeriod.SelectedIndex -eq 5 -and $dtFrom.Value -ge $dtTo.Value)
+  if ($badRange) {
+    $lblSum.Text = 'Начало периода должно быть раньше конца.'
+    $lblSum.ForeColor = [System.Drawing.Color]::Firebrick
+  } else {
+    $lblSum.ForeColor = [System.Drawing.SystemColors]::ControlText
+    $whole = if ($cmbPeriod.SelectedIndex -eq 4) { 'объём до сжатия около {0}' -f (Format-Size $bytes) } else { 'журналы целиком — {0}, выгрузятся только события за период' -f (Format-Size $bytes) }
+    $lblSum.Text = 'Выбрано журналов: {0} из {1} · {2}' -f $sel.Count, $avail, $whole
+  }
+  $btnMain.Enabled = ($sel.Count -gt 0 -and -not $badRange)
 }
 
 $lv.Add_ItemCheck({
@@ -295,6 +371,7 @@ function Set-Row([int]$k) {
       'run' { $item.ForeColor = [System.Drawing.Color]::RoyalBlue }
       'ok'  { $item.ForeColor = [System.Drawing.Color]::DarkGreen }
       'err' { $item.ForeColor = [System.Drawing.Color]::Firebrick }
+      'empty' { $item.ForeColor = [System.Drawing.Color]::Gray }
     }
     if ($sync.State[$k] -eq 'run') { $item.EnsureVisible() }
   }
@@ -312,9 +389,15 @@ function Start-Collect {
     Show-Msg ("Не получается сохранить архив в папку:`n{0}`n`n{1}`n`nВыберите другую папку кнопкой «Обзор…»." -f $out, $_.Exception.Message) 'Warning'
     return
   }
+  $per = Get-Period
+  if ($per.From -and $per.From -ge $per.To) { Show-Msg 'Начало периода должно быть раньше конца.' 'Warning'; return }
+  $st.Period = $per
   $cfg.OutDir = (Resolve-Path -LiteralPath $out).Path
+  $cfg.Period = $cmbPeriod.SelectedIndex
   Save-Cfg
-  $st.Zip = Join-Path $cfg.OutDir ('{0}-logs-{1}.zip' -f $env:COMPUTERNAME, $stamp)
+  $suffix = if ($per.From) { '{0:yyyyMMdd_HHmm}-{1:yyyyMMdd_HHmm}' -f $per.From, $per.To } else { 'all_' + $stamp }
+  $st.Zip = Join-Path $cfg.OutDir ('{0}-logs-{1}.zip' -f $env:COMPUTERNAME, $suffix)
+  if (Test-Path -LiteralPath $st.Zip) { $st.Zip = Join-Path $cfg.OutDir ('{0}-logs-{1}-{2}.zip' -f $env:COMPUTERNAME, $suffix, $stamp) }
   $st.Items = @($lv.Items | Where-Object { $_.Checked })
   try { New-Item -ItemType Directory -Force -Path $tmp -ErrorAction Stop | Out-Null } catch {
     Show-Msg ("Не удалось создать временную папку:`n{0}`n`n{1}" -f $tmp, $_.Exception.Message) 'Error'
@@ -325,7 +408,8 @@ function Start-Collect {
   foreach ($i in $lv.Items) { if (-not $i.Checked) { $i.ForeColor = [System.Drawing.Color]::Gray } }
   foreach ($i in $st.Items) { $i.SubItems[3].Text = 'в очереди' }
   $lblTitle.Text = 'Идёт сбор журналов…'
-  $lblInfo.Text = "Журналы выгружаются во временную папку, затем упаковываются в архив:`n{0}" -f $st.Zip
+  $lblInfo.Text = "Период: {0}. Журналы выгружаются во временную папку, затем упаковываются в архив:`n{1}" -f $per.Text, $st.Zip
+  foreach ($c in @($cmbPeriod, $dtFrom, $dtTo)) { $c.Enabled = $false }
   $lblSum.Text = 'Журналов к выгрузке: {0}' -f $st.Items.Count
   $txtOut.ReadOnly = $true
   $btnBrowse.Enabled = $false
@@ -337,7 +421,7 @@ function Start-Collect {
 
   $names = [string[]]@($st.Items | ForEach-Object { $_.Tag.Name })
   $ps = [powershell]::Create()
-  [void]$ps.AddScript($worker).AddArgument($sync).AddArgument($names).AddArgument($tmp).AddArgument($st.Zip)
+  [void]$ps.AddScript($worker).AddArgument($sync).AddArgument($names).AddArgument($tmp).AddArgument($st.Zip).AddArgument([string]$per.Query)
   $sync.Phase = 'starting'
   $st.Ps = $ps
   $st.Handle = $ps.BeginInvoke()
@@ -360,7 +444,8 @@ function Show-Final {
   $lblSum.Visible = $false
   $lblTemp.Visible = $false
   $pb.Visible = $false
-  $lv.Height = 200
+  foreach ($c in @($lblPeriod, $cmbPeriod, $dtFrom, $lblDash, $dtTo, $lblTz)) { $c.Visible = $false }
+  $lv.Height = 250
   $form.Activate()
 }
 
@@ -370,21 +455,27 @@ function Finish-Done {
   $errs = @($sync.State.Values | Where-Object { $_ -eq 'err' }).Count
   $lblTitle.Text = 'Готово — архив создан'
   $extra = if ($errs) { " · не выгрузилось: $errs (см. статус в списке)" } else { '' }
-  $lblInfo.Text = "Архив: {0} · журналов: {1} · заняло {2}{3}`nВременные файлы удалены." -f (Format-Size $sync.ZipSize), $sync.Saved, $st.Sw.Elapsed.ToString('m\:ss'), $extra
-  $lblOut.Location = New-Object System.Drawing.Point(20, 320)
+  $empty = @($sync.State.Values | Where-Object { $_ -eq 'empty' }).Count
+  if ($empty) { $extra += " · без событий за период: $empty" }
+  $lblInfo.Text = "Период: {0}`nАрхив: {1} · журналов: {2}, событий: {3} · заняло {4}{5}" -f $st.Period.Text, (Format-Size $sync.ZipSize), $sync.Saved, ([long]$sync.Events).ToString('N0'), $st.Sw.Elapsed.ToString('m\:ss'), $extra
+  $lblOut.Location = New-Object System.Drawing.Point(20, 370)
   $lblOut.Text = 'Файл архива:'
-  $txtOut.Location = New-Object System.Drawing.Point(20, 342)
+  $txtOut.Location = New-Object System.Drawing.Point(20, 392)
   $txtOut.Text = $st.Zip
-  $btnBrowse.Location = New-Object System.Drawing.Point(640, 340)
+  $btnBrowse.Location = New-Object System.Drawing.Point(640, 390)
   $btnBrowse.Text = 'Копировать'
   $btnBrowse.Enabled = $true
   $lblNext.Text = ("Что дальше:`n" +
     "1. Откройте LogAtlas в браузере — кнопка «Открыть» ниже (адрес запоминается).`n" +
     "2. На главной странице нажмите «+ Загрузить» и перетащите архив в окно (или «Выбрать файлы»).`n" +
     "3. Нажмите «Загрузить и разобрать». Распаковывать архив не нужно — LogAtlas сделает это сам.")
+  $lblNext.Location = New-Object System.Drawing.Point(20, 430)
+  $lblUrl.Location = New-Object System.Drawing.Point(20, 520)
+  $txtUrl.Location = New-Object System.Drawing.Point(130, 517)
+  $btnOpen.Location = New-Object System.Drawing.Point(640, 515)
   $lblNext.Visible = $true
   foreach ($c in @($lblUrl, $txtUrl, $btnOpen)) { $c.Visible = $true }
-  $lblStatus.Location = New-Object System.Drawing.Point(20, 504)
+  $lblStatus.Location = New-Object System.Drawing.Point(20, 552)
   $lblStatus.ForeColor = $gray
   $lblStatus.Text = 'В архиве — журналы безопасности этого компьютера. Не пересылайте его посторонним и удалите после анализа.'
   $btnMain.Text = 'Показать в Проводнике'
@@ -471,7 +562,8 @@ $form.Add_FormClosing({
   while ($st.Handle -and -not $st.Handle.IsCompleted -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 100 }
 })
 
-Update-Sum
+$cmbPeriod.SelectedIndex = $cfg.Period
+Set-Preset
 $form.ResumeLayout($false)
 [void]$form.ShowDialog()
 $timer.Dispose()

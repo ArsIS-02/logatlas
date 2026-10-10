@@ -100,7 +100,7 @@ sudo firewall-cmd --add-port=8484/tcp --permanent && sudo firewall-cmd --reload
 | macOS | `sudo bash collect-macos.sh 3` | unified log за N дней (без самых шумных подсистем), `pmset -g log`, `system.log`, `install.log`, `wifi.log`, `launchd.log` |
 | Linux | `sudo bash collect-linux.sh` | диалог: какие журналы (journald, auditd, secure/auth.log, syslog, cron, пакеты, fail2ban, веб-серверы, входы из wtmp/btmp, Wazuh) и за какой период по часам хоста; архив можно сразу отправить в LogAtlas. `sudo bash collect-linux.sh 3` — без вопросов, за 3 дня |
 | Windows | `powershell -ExecutionPolicy Bypass -File collect-windows.ps1` | Security, System, Application, Sysmon, PowerShell, Defender, планировщик, RDP — в `.evtx` |
-| Windows, с окном | двойной щелчок по `collect-windows-gui.cmd` | то же, с выбором журналов, ходом сбора и подсказкой, что делать с архивом |
+| Windows, с окном | двойной щелчок по `collect-windows-gui.cmd` | то же, с выбором журналов и периода (24 часа, 3, 7, 30 дней, всё время или свои даты «с … по …»), ходом сбора и подсказкой, что делать с архивом |
 
 `collect-windows-gui.cmd` — самодостаточный файл: его можно положить на рабочий стол и запускать двойным щелчком. Он запросит права администратора, покажет, какие журналы есть на компьютере и куда сохранится архив, ход выгрузки и что делать дальше. Адрес LogAtlas для кнопки «Открыть» задаётся в строке `set "LOGATLAS_URL="` в начале файла или прямо в окне — он запоминается.
 
