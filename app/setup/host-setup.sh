@@ -44,8 +44,8 @@ fi
 PANEL_IP="${PANEL_IP:-}"
 if [ -z "$PANEL_IP" ]; then
   if [[ "$PANEL_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then PANEL_IP="$PANEL_HOST"
-  elif [ "$OS" = Darwin ]; then PANEL_IP="$(dscacheutil -q host -a name "$PANEL_HOST" 2>/dev/null | awk '/^ip_address:/{print $2; exit}')"
-  else PANEL_IP="$(getent ahostsv4 "$PANEL_HOST" 2>/dev/null | awk '{print $1; exit}')"; fi
+  elif [ "$OS" = Darwin ]; then PANEL_IP="$(dscacheutil -q host -a name "$PANEL_HOST" 2>/dev/null | awk '/^ip_address:/ && !f {print $2; f=1}')"
+  else PANEL_IP="$(getent ahostsv4 "$PANEL_HOST" 2>/dev/null | awk 'NR==1 {print $1}')"; fi
 fi
 [ -n "$PANEL_IP" ] || die "не удалось узнать IP панели $PANEL_HOST — задайте его: curl … | sudo PANEL_IP=192.168.x.x bash"
 # 172.16.0.0/12 — сеть Docker: так панель ходит на собственный хост
@@ -55,7 +55,9 @@ FROM="$PANEL_IP,172.16.0.0/12,127.0.0.1,::1"
 if ! id "$U" >/dev/null 2>&1; then
   say "Создаю пользователя ${U}…"
   if [ "$OS" = Darwin ]; then
-    pw="$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32)"
+    # пароль никто не узнает: вход только по ключу (без head в конвейере — иначе set -o pipefail роняет скрипт)
+    pw="$(openssl rand -base64 33 2>/dev/null | tr -dc 'A-Za-z0-9')"
+    [ ${#pw} -ge 20 ] || pw="$(date +%s)$RANDOM$RANDOM$RANDOM"
     sysadminctl -addUser "$U" -fullName "LogAtlas collector" -shell /bin/sh -home "/Users/$U" -password "$pw" >/dev/null 2>&1 \
       || die "sysadminctl не смог создать пользователя"
     dscl . -create "/Users/$U" IsHidden 1
@@ -119,7 +121,7 @@ if [ "$OS" = Darwin ]; then
   launchctl print system/com.openssh.sshd >/dev/null 2>&1 || say "  ВНИМАНИЕ: «Удалённый вход» выключен — Системные настройки → Основные → Общий доступ → Удалённый вход."
 fi
 out="$(cd / && sudo -u "$U" env SSH_ORIGINAL_COMMAND=scan "$D/logatlas-ssh" </dev/null 2>/dev/null || true)"
-n="$(printf '%s' "$out" | grep -o '"id":' | wc -l | tr -d ' ')"
+n="$(printf "%s" "$out" | grep -o "\"id\":" | wc -l | tr -d " " || true)"
 if [ "${n:-0}" -gt 0 ]; then
   say "  скрипт сбора работает, найдено журналов: $n"
 else
