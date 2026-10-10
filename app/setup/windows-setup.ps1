@@ -1,9 +1,9 @@
-# LogAtlas: подготовка Windows-хоста к сбору журналов из веб-панели.
+# LogAtlas: подготовка Windows-хоста к сбору журналов из веб-панели @@BASE@@
 #
-# В PowerShell, открытом от имени администратора:
-#   iex (iwr -UseBasicParsing @@BASE@@/setup/windows.ps1).Content
+# В PowerShell, открытом от имени администратора, в папке со скачанным файлом:
+#   powershell -ExecutionPolicy Bypass -File .\logatlas-setup.ps1
 # Убрать всё, что сделал скрипт:
-#   $env:LOGATLAS_REMOVE = 1; iex (iwr -UseBasicParsing @@BASE@@/setup/windows.ps1).Content
+#   powershell -ExecutionPolicy Bypass -File .\logatlas-setup.ps1 -Remove
 #
 # Что делает:
 #   • включает встроенный OpenSSH Server (служба sshd, автозапуск);
@@ -11,8 +11,8 @@
 #     в группе «Читатели журнала событий» (Event Log Readers);
 #   • кладёт ключ панели в C:\ProgramData\LogAtlas\authorized_keys: вход только с адреса панели;
 #   • в sshd_config для этого пользователя — единственная команда: скрипт сбора (только читает журналы).
+param([switch]$Remove)
 
-& {
 $ErrorActionPreference = 'Stop'
 $PanelHost = '@@PANEL_HOST@@'
 $PubKey = '@@PUBKEY@@'
@@ -35,8 +35,7 @@ function Remove-Block {
   }
 }
 
-if ($env:LOGATLAS_REMOVE) {
-  Remove-Item Env:\LOGATLAS_REMOVE
+if ($Remove) {
   Say 'Удаляю настройки LogAtlas…'
   Remove-Block
   if (Get-LocalUser -Name $User -ErrorAction SilentlyContinue) { Remove-LocalUser -Name $User }
@@ -86,8 +85,11 @@ try { Add-LocalGroupMember -SID 'S-1-5-32-573' -Member $User -ErrorAction Stop }
 # ------------------------------------------------------------------ скрипт сбора и ключ
 New-Item -ItemType Directory -Force -Path $Dir | Out-Null
 $collector = Join-Path $Dir 'collect-windows-remote.ps1'
-$bytes = [Convert]::FromBase64String('@@COLLECT_WINDOWS_B64@@')
-[IO.File]::WriteAllBytes($collector, $bytes)
+# текст скрипта сбора — тот же, что scripts/collect-windows-remote.ps1 в репозитории LogAtlas
+$collectorText = @'
+@@COLLECT_WINDOWS_TEXT@@
+'@
+[IO.File]::WriteAllText($collector, $collectorText, (New-Object Text.UTF8Encoding $true))
 $keys = Join-Path $Dir 'authorized_keys'
 [IO.File]::WriteAllText($keys, ('restrict,from="{0},172.16.0.0/12,127.0.0.1" {1}' -f $PanelIp, $PubKey) + "`n", (New-Object Text.ASCIIEncoding))
 # права: SYSTEM и администраторы — полный доступ, logatlas-collect — чтение
@@ -125,4 +127,3 @@ Remove-Item Env:\SSH_ORIGINAL_COMMAND
 Say ''
 Say ("Готово. {0} подготовлен: пользователь {1}, вход только с {2} по ключу панели LogAtlas ({3})." -f $env:COMPUTERNAME, $User, $PanelIp, ($v -join ' ')) 'Green'
 Say 'Добавьте хост в панели: «Хосты» → «+ Хост» (адрес этого компьютера, система: Windows).'
-}

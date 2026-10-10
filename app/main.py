@@ -408,8 +408,9 @@ def collect_info(req):
         "commands": {
             "unix": f"curl -fsSL {base}/setup/host.sh | sudo bash",
             "unix_remove": f"curl -fsSL {base}/setup/host.sh | sudo bash -s -- --remove",
-            "windows": f"iex (iwr -UseBasicParsing {base}/setup/windows.ps1).Content",
-            "windows_remove": f"$env:LOGATLAS_REMOVE=1; iex (iwr -UseBasicParsing {base}/setup/windows.ps1).Content",
+            "windows_url": f"{base}/setup/windows.ps1",
+            "windows": "powershell -ExecutionPolicy Bypass -File .\\logatlas-setup.ps1",
+            "windows_remove": "powershell -ExecutionPolicy Bypass -File .\\logatlas-setup.ps1 -Remove",
         },
     })
 
@@ -422,7 +423,10 @@ def setup_script(req):
         text = collect.setup_script("host" if kind == "host.sh" else "windows", _base(req), _panel_host(req))
     except (OSError, RuntimeError) as e:
         return Response(f"echo 'LogAtlas: {e}'\n", media_type="text/plain; charset=utf-8", status_code=503)
-    return Response(text, media_type="text/plain; charset=utf-8", headers={"Cache-Control": "no-store"})
+    headers = {"Cache-Control": "no-store"}
+    if kind == "windows.ps1":
+        headers["Content-Disposition"] = 'attachment; filename="logatlas-setup.ps1"'
+    return Response(text, media_type="text/plain; charset=utf-8", headers=headers)
 
 
 def hosts_list(req):

@@ -105,7 +105,8 @@ export async function renderHosts(view) {
         </div>
         <div class="setup-os">
           <h3>${raw(platIcon('windows'))} Windows 10/11</h3>
-          <p class="muted small-t">В PowerShell, открытом от имени администратора. Скрипт включит встроенный OpenSSH Server, если он выключен:</p>
+          <p class="muted small-t">1. Скачайте скрипт на этот хост: <a class="btn small" href="${info.commands.windows_url}" download="logatlas-setup.ps1">logatlas-setup.ps1</a></p>
+          <p class="muted small-t">2. В PowerShell от имени администратора перейдите в папку с файлом (<span class="mono">cd</span>) и выполните — скрипт включит встроенный OpenSSH Server, если он выключен:</p>
           <div class="cmdline"><code>${info.commands.windows}</code>${copyBtn(info.commands.windows)}</div>
         </div>
       </div>
@@ -113,7 +114,7 @@ export async function renderHosts(view) {
         <summary>Убрать с хоста, ключ панели</summary>
         <p class="muted small-t">Убрать пользователя и скрипты — Linux и macOS:</p>
         <div class="cmdline"><code>${info.commands.unix_remove}</code>${copyBtn(info.commands.unix_remove)}</div>
-        <p class="muted small-t">Windows (PowerShell от имени администратора):</p>
+        <p class="muted small-t">Windows (PowerShell от имени администратора, в папке с logatlas-setup.ps1):</p>
         <div class="cmdline"><code>${info.commands.windows_remove}</code>${copyBtn(info.commands.windows_remove)}</div>
         <p class="muted small-t">Открытый ключ панели (лежит в <span class="mono">data/keys/</span>):</p>
         <div class="cmdline"><code>${info.pubkey || 'ещё не создан'}</code>${info.pubkey ? copyBtn(info.pubkey) : ''}</div>

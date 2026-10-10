@@ -381,10 +381,15 @@ def setup_script(kind: str, base: str, panel_host: str) -> str:
     else:
         with open(os.path.join(SETUP_DIR, "windows-setup.ps1"), encoding="utf-8") as f:
             t = f.read()
-        repl = {"@@COLLECT_WINDOWS_B64@@": _b64("collect-windows-remote.ps1")}
+        with open(os.path.join(SCRIPTS_DIR, "collect-windows-remote.ps1"), encoding="utf-8-sig") as f:
+            text = f.read().replace("\r\n", "\n").rstrip("\n")
+        if re.search(r"^'@", text, re.M):
+            raise RuntimeError("collect-windows-remote.ps1 нельзя встроить в here-string")
+        repl = {"@@COLLECT_WINDOWS_TEXT@@": text}
     repl.update({"@@BASE@@": base, "@@PANEL_HOST@@": panel_host, "@@PUBKEY@@": key, "@@VERSION@@": COLLECT_VERSION})
     for k, v in repl.items():
         t = t.replace(k, v)
     if kind == "windows":
-        t = t.replace("\r\n", "\n").replace("\n", "\r\n")
+        # BOM — чтобы Windows PowerShell 5.1 прочитал кириллицу; CRLF — привычные окончания строк Windows
+        t = "\ufeff" + t.replace("\r\n", "\n").replace("\n", "\r\n")
     return t

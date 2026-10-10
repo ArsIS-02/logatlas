@@ -114,7 +114,7 @@ sudo firewall-cmd --add-port=8484/tcp --permanent && sudo firewall-cmd --reload
    | Хост | Где выполнить | Команда |
    |---|---|---|
    | Linux, macOS | терминал, пользователь с `sudo` | `curl -fsSL http://<панель>:8484/setup/host.sh \| sudo bash` |
-   | Windows 10/11 | PowerShell от имени администратора | `iex (iwr -UseBasicParsing http://<панель>:8484/setup/windows.ps1).Content` |
+   | Windows 10/11 | PowerShell от имени администратора, в папке со скачанным `logatlas-setup.ps1` (ссылка в панели) | `powershell -ExecutionPolicy Bypass -File .\logatlas-setup.ps1` |
 
    Скрипт создаёт пользователя `logatlas-collect`, кладёт ему ключ панели и ставит скрипт сбора (см. «Безопасность»). На Windows он заодно включает встроенный OpenSSH Server, на macOS нужно заранее включить «Удалённый вход». Убрать всё с хоста — команды под спойлером «Убрать с хоста» в панели.
 2. **Добавить хост:** «+ Хост» — адрес (имя или IP), порт SSH, система. «Проверить» подключается и показывает, сколько журналов найдено и часовой пояс хоста.
