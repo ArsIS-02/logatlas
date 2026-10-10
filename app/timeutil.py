@@ -35,18 +35,31 @@ def ms_to_str(ms: int | None) -> str:
     return d.strftime("%Y-%m-%d %H:%M:%S.") + f"{d.microsecond // 1000:03d}"
 
 
+_OFF_RE = re.compile(r"([+-])(\d{2}):?(\d{2})?")
+_OFF_CACHE: dict = {}
+
+
 def parse_offset(s: str | None) -> int | None:
     """'+0500' / '+05:00' / '+05' / 'Z' -> минуты; None если нет смещения."""
     if not s:
         return None
-    s = s.strip()
-    if s in ("Z", "z", "UTC", "GMT"):
-        return 0
-    m = re.fullmatch(r"([+-])(\d{2}):?(\d{2})?", s)
-    if not m:
-        return None
-    v = int(m.group(2)) * 60 + int(m.group(3) or 0)
-    return -v if m.group(1) == "-" else v
+    r = _OFF_CACHE.get(s, False)
+    if r is not False:
+        return r
+    v = s.strip()
+    if v in ("Z", "z", "UTC", "GMT"):
+        r = 0
+    else:
+        m = _OFF_RE.fullmatch(v)
+        if not m:
+            r = None
+        else:
+            r = int(m.group(2)) * 60 + int(m.group(3) or 0)
+            if m.group(1) == "-":
+                r = -r
+    if len(_OFF_CACHE) < 1000:
+        _OFF_CACHE[s] = r
+    return r
 
 
 # 2026-10-09 12:27:06.765447+0500 | 2026-09-11 20:32:37+05 | 2026-09-13T08:33:46.663Z
@@ -64,15 +77,31 @@ def parse_iso(s: str):
     return iso_match_to_ms(m)
 
 
+_DAY_CACHE: dict = {}
+
+
+def day_ms(y: str, mo: str, d: str):
+    """Начало суток в мс (кэш: в журнале обычно несколько дат на миллионы строк)."""
+    k = (y, mo, d)
+    v = _DAY_CACHE.get(k)
+    if v is None:
+        try:
+            v = calendar.timegm((int(y), int(mo), int(d), 0, 0, 0, 0, 0, 0)) * 1000
+        except (ValueError, OverflowError):
+            v = False
+        if len(_DAY_CACHE) > 20000:
+            _DAY_CACHE.clear()
+        _DAY_CACHE[k] = v
+    return v
+
+
 def iso_match_to_ms(m):
-    y, mo, d, hh, mi, ss = (int(x) for x in m.group(1, 2, 3, 4, 5, 6))
-    frac = m.group(7)
-    ms = int((frac + "000")[:3]) if frac else 0
-    try:
-        base = calendar.timegm((y, mo, d, hh, mi, ss, 0, 0, 0)) * 1000 + ms
-    except (ValueError, OverflowError):
+    y, mo, d, hh, mi, ss, frac, off = m.groups()
+    base = day_ms(y, mo, d)
+    if base is False:
         return None
-    return base, parse_offset(m.group(8))
+    ms = int((frac + "000")[:3]) if frac else 0
+    return base + int(hh) * 3600000 + int(mi) * 60000 + int(ss) * 1000 + ms, parse_offset(off)
 
 
 def naive_ms(y, mo, d, hh, mi, ss, ms=0):

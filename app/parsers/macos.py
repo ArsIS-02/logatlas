@@ -4,8 +4,8 @@ from __future__ import annotations
 import json
 import re
 
-from ..timeutil import ISO_RE, MONTHS, infer_year, iso_match_to_ms, naive_ms, parse_iso
-from .base import Parser, ev, first_lines, jloads
+from ..timeutil import ISO_RE, MONTHS, day_ms, infer_year, iso_match_to_ms, naive_ms, parse_iso, parse_offset
+from .base import MAX_MSG, Parser, ev, first_lines, jdumps, jloads
 from .classify import Classifier, NOISE, R
 
 # ---------------------------------------------------------------------------
@@ -137,8 +137,14 @@ class UnifiedParser(Parser):
         return 0
 
     def parse(self, src, ctx):
+        # Миллионы строк на сбор: всё, что повторяется (сутки, смещение, процесс по пути, поле extra),
+        # считается один раз и берётся из словарей.
         tcc = {}
         clf = UNIFIED.match
+        procs = {}          # processImagePath → имя процесса
+        extras = {}         # (path, category) → готовый JSON поля extra
+        tzv = ctx.tz_votes
+        level_map = LEVEL_MAP
         for d in _json_records(src):
             if not isinstance(d, dict):
                 continue
@@ -147,25 +153,44 @@ class UnifiedParser(Parser):
                 ctx.noise += 1
                 continue
             ts = d.get("timestamp") or ""
-            m = ISO_RE.match(ts)
-            if not m:
-                ctx.bad += 1
-                continue
-            r = iso_match_to_ms(m)
-            if not r:
-                ctx.bad += 1
-                continue
-            t, off = r
+            # обычный вид: «2026-10-09 19:00:01.123456+0500»
+            t = None
+            if len(ts) == 31 and ts[10] == " " and ts[19] == "." and ts[4] == "-" and ts[13] == ":" \
+                    and ts[11:13].isdigit() and ts[14:16].isdigit() and ts[17:19].isdigit() and ts[20:23].isdigit():
+                try:
+                    base = day_ms(ts[0:4], ts[5:7], ts[8:10])
+                    if base is not False:
+                        t = base + int(ts[11:13]) * 3600000 + int(ts[14:16]) * 60000 + int(ts[17:19]) * 1000 \
+                            + int(ts[20:23])
+                        off = parse_offset(ts[26:])
+                except ValueError:
+                    t = None
+            if t is None:
+                m = ISO_RE.match(ts)
+                if not m:
+                    ctx.bad += 1
+                    continue
+                r = iso_match_to_ms(m)
+                if not r:
+                    ctx.bad += 1
+                    continue
+                t, off = r
             z = 0
             if off is not None:
                 t -= off * 60000
                 z = 1
-                ctx.tz_votes[off] += 1
+                tzv[off] += 1
             path = d.get("processImagePath") or ""
-            proc = path.rsplit("/", 1)[-1] or None
+            proc = procs.get(path)
+            if proc is None:
+                proc = procs[path] = path.rsplit("/", 1)[-1] or None
+                if proc is None:
+                    procs[path] = ""
+            elif proc == "":
+                proc = None
             msg = d.get("eventMessage") or ""
             sub = d.get("subsystem") or None
-            level = LEVEL_MAP.get(d.get("messageType"), "info")
+            level = level_map.get(d.get("messageType"), "info")
             uid = d.get("userID")
             res = clf(proc, msg)
             if res == "noise":
@@ -180,12 +205,22 @@ class UnifiedParser(Parser):
                 cat, action, subj, lv = _tcc(msg, tcc)
                 if lv:
                     level = lv
-            extra = {"path": path} if path and not path.startswith("/System/") and not path.startswith("/usr/libexec/") else None
-            if sub and d.get("category"):
-                extra = extra or {}
-                extra["cat"] = d.get("category")
-            yield ev(t, z, None, None, proc, d.get("processID"), user or (str(uid) if uid not in (None, 0) else None),
-                     level, cat, action, subj, sub, msg, extra)
+            lcat = d.get("category") if sub else None
+            key = (path, lcat or None)
+            extra = extras.get(key, False)
+            if extra is False:
+                ex = {"path": path} if path and not path.startswith("/System/") and not path.startswith("/usr/libexec/") else None
+                if lcat:
+                    ex = ex or {}
+                    ex["cat"] = lcat
+                extra = jdumps(ex) if ex else None
+                if len(extras) < 50000:
+                    extras[key] = extra
+            if len(msg) > MAX_MSG:
+                msg = msg[:MAX_MSG] + " …"
+            yield (t, z, None, None, proc, d.get("processID"),
+                   user or (str(uid) if uid not in (None, 0) else None),
+                   level, cat, action, subj, sub, msg, extra)
         ctx.platform = "macos"
         ctx.label = "unified log"
 

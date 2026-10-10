@@ -547,7 +547,7 @@ def _plan_stream(f, name, size, mtime, depth, job, upload, default_mtime):
         for src in explode(p, name, size, mtime, job.tmpdir, depth, job.notes):
             job.inline(src, upload, default_mtime)
         return
-    if _splittable(os.path.basename(name), h) and (size is None or size > CHUNK):
+    if job.pool is not None and _splittable(os.path.basename(name), h) and (size is None or size > CHUNK):
         _split_lines(io.BufferedReader(p, 1 << 20), job, name, size, mtime, depth, upload, default_mtime)
         return
     for src in explode(p, name, size, mtime, job.tmpdir, depth, job.notes):
@@ -603,7 +603,8 @@ def _plan_upload(path, job):
         except (OSError, EOFError):
             inner_head = b""
     archive = _is_tar(h) or (h[:2] == b"\x1f\x8b" and _is_tar(inner_head))
-    big_lines = _splittable(_strip_ext(up_name, ".gz"), inner_head) and st.st_size > (CHUNK if h == inner_head else CHUNK // 8)
+    big_lines = job.pool is not None and _splittable(_strip_ext(up_name, ".gz"), inner_head) \
+        and st.st_size > (CHUNK if h == inner_head else CHUNK // 8)
     if archive or big_lines:
         with open(path, "rb") as fh:
             counter = Counting(fh)
@@ -635,13 +636,28 @@ def run_ingest(case_id, paths, tz_default, tz_mode):
     job.total_bytes = sum(os.path.getsize(p) for p in paths) or 1
     con = None
     try:
+        from concurrent.futures.process import BrokenProcessPool
         job.start_pool()
         if job.pool is not None:
             db.add_log(case_id, "info", f"Разбор идёт параллельно: процессов {job.n}")
-        for path in paths:
-            _plan_upload(path, job)
-        job.wait_all()
-        job.collect()
+        try:
+            for path in paths:
+                _plan_upload(path, job)
+            job.wait_all()
+            job.collect()
+        except BrokenProcessPool:
+            # процесс-воркер убит (чаще всего системе не хватило памяти) — начинаем заново в одном процессе
+            log.warning("worker process died, re-parsing case %s in one process", case_id)
+            db.add_log(case_id, "warn", "Процесс разбора аварийно завершился (возможно, не хватило памяти) — "
+                                        "разбираю заново в одном процессе")
+            job.stop_pool()
+            shutil.rmtree(tmpdir, ignore_errors=True)
+            os.makedirs(tmpdir, exist_ok=True)
+            del notes[:]
+            job = _Job(case_id, tz_default, tmpdir, notes)
+            job.total_bytes = sum(os.path.getsize(p) for p in paths) or 1
+            for path in paths:
+                _plan_upload(path, job)
         job.stop_pool()
         t_parse = time.time() - t_start
 
