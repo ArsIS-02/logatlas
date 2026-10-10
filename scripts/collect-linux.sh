@@ -444,7 +444,7 @@ for id in "${IDS[@]}"; do [ "${AVAIL[$id]}" = 1 ] && AVAIL_IDS+=("$id") && SEL[$
 if [ "$MODE" = scan ]; then
   jstr() { local v="${1//\\/\\\\}"; v="${v//\"/\\\"}"; printf '"%s"' "$v"; }
   {
-    printf '{"os":"linux","version":"1.1","host":%s,"tz_offset_min":%d,"tz_name":%s,"now":%d,"python":%s,"sources":[' \
+    printf '{"os":"linux","version":"1.2","host":%s,"tz_offset_min":%d,"tz_name":%s,"now":%d,"python":%s,"sources":[' \
       "$(jstr "$HOST")" "$OFFMIN" "$(jstr "$TZNAME")" "$(date +%s)" "$([ -n "$PY" ] && echo true || echo false)"
     first=1
     for id in "${AVAIL_IDS[@]}"; do
@@ -519,6 +519,30 @@ if [ $YES = 0 ]; then
 fi
 
 # ------------------------------------------------------------------ 3. сбор
+# Параллельные процессы: journalctl режется на отрезки периода по числу ядер (не больше 8),
+# каждый отрезок сразу сжимается gzip -1 — так сбор и упаковка идут на всех ядрах.
+NPAR=$(nproc 2>/dev/null || echo 1); [ "$NPAR" -gt 8 ] && NPAR=8; [ "$NPAR" -lt 1 ] && NPAR=1
+
+journal_slices() {  # $1 — каталог
+  local n=$NPAR step k a b cut
+  [ $((UNTIL - SINCE)) -lt 7200 ] && n=1
+  step=$(( (UNTIL - SINCE + n - 1) / n )); [ "$step" -lt 1 ] && step=1
+  for ((k = 0; k < n; k++)); do
+    a=$((SINCE + k * step)); b=$((a + step)); [ "$b" -gt "$UNTIL" ] && b=$UNTIL
+    [ "$a" -ge "$b" ] && break
+    # граница отрезков: событие ровно в момент b попадёт в следующий отрезок, из этого — убираем
+    cut="${b}000000"; [ "$b" -ge "$UNTIL" ] && cut="-"
+    ( journalctl --since "$(date -d "@$a" '+%Y-%m-%d %H:%M:%S')" --until "$(date -d "@$b" '+%Y-%m-%d %H:%M:%S')" \
+        -o json --no-pager 2>/dev/null \
+        | grep -vF -e "\"__REALTIME_TIMESTAMP\":\"$cut\"" -e "\"__REALTIME_TIMESTAMP\" : \"$cut\"" \
+        | gzip -1 > "$1/journal-$(printf %02d "$k").json.gz" ) &
+  done
+  wait
+  # пустые отрезки (gzip от пустого потока — 20 байт) не нужны
+  for f in "$1"/journal-*.json.gz; do [ -f "$f" ] && [ "$(gzip -dc "$f" | head -c 1 | wc -c)" -eq 0 ] && rm -f "$f"; done
+  return 0
+}
+
 WORK="$(mktemp -d /var/tmp/logatlas.XXXXXX)"
 say ""
 say "${B}Сбор${N}  ${D}(временная папка ${WORK})${N}"
@@ -530,7 +554,7 @@ for id in "${CHOSEN[@]}"; do
   dir="$WORK/$id"; mkdir -p "$dir"
   case "$id" in
     journal)
-      journalctl --since "$(date -d "@$SINCE" '+%Y-%m-%d %H:%M:%S')" --until "$(date -d "@$UNTIL" '+%Y-%m-%d %H:%M:%S')" -o json --no-pager > "$dir/journal.json" 2>/dev/null ;;
+      journal_slices "$dir" ;;
     wtmp)
       s="$(date -d "@$SINCE" '+%Y-%m-%d %H:%M:%S')"; u="$(date -d "@$UNTIL" '+%Y-%m-%d %H:%M:%S')"
       for kind in last lastb; do
@@ -554,6 +578,9 @@ for id in "${CHOSEN[@]}"; do
   bytes=$(du -sb "$dir" 2>/dev/null | cut -f1); lines=$(find "$dir" -type f ! -name '*.gz' -exec cat {} + 2>/dev/null | wc -l)
   if [ -z "$(ls -A "$dir")" ]; then
     rmdir "$dir"; say "${D}нет записей за период${N}"; result empty "${LABEL[$id]}"
+  elif [ "$lines" -eq 0 ]; then   # только сжатые файлы (журнал systemd по отрезкам)
+    got=$((got + 1)); say "${G}$(human "$bytes")${N} ${D}сжато${N}"
+    result ok "${LABEL[$id]}|$(human "$bytes") сжато"
   else
     got=$((got + 1)); say "${G}$(human "$bytes")${N} · $(printf "%'d" "$lines" 2>/dev/null || echo "$lines") строк"
     result ok "${LABEL[$id]}|$(human "$bytes"), строк: $lines"
@@ -564,13 +591,16 @@ if [ $got -eq 0 ]; then warn "За выбранный период записе�
 
 if [ "$MODE" = stream ]; then
   progress pack
-  tar -czf - -C "$WORK" . >&3 || die "Не удалось упаковать журналы"
+  # каждый файл сжимается отдельно и параллельно; tar без общего сжатия —
+  # панель разбирает сжатые файлы на всех ядрах сразу
+  find "$WORK" -type f ! -name '*.gz' -print0 | xargs -0 -r -P "$NPAR" -n 4 gzip -1 2>/dev/null
+  tar -cf - -C "$WORK" . >&3 || die "Не удалось упаковать журналы"
   exit 0
 fi
 
 say ""
 printf "  Упаковка… "
-tar -czf "$ARCHIVE" -C "$WORK" . || die "Не удалось создать архив $ARCHIVE"
+tar -cf - -C "$WORK" . | gzip -1 > "$ARCHIVE" || die "Не удалось создать архив $ARCHIVE"
 chmod 600 "$ARCHIVE"
 if [ $CLIENT = 1 ]; then
   ln -sfn "$(basename "$ARCHIVE")" "$OUTDIR/last.tar.gz"

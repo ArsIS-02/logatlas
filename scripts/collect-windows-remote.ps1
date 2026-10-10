@@ -11,7 +11,7 @@ LogAtlas: сбор журналов Windows по SSH для веб-панели 
 Скрипт только читает журналы. Файл сохранён в UTF-8 с BOM.
 #>
 $ErrorActionPreference = 'Stop'
-$VERSION = '1.1'
+$VERSION = '1.2'
 
 # id = канал, название, описание, собирать по умолчанию
 $LOGS = [ordered]@{
@@ -79,6 +79,18 @@ function Do-Scan {
   Write-Bytes $stdout (($o | ConvertTo-Json -Depth 4 -Compress) + "`n")
 }
 
+function Start-Wev([string]$arguments) {
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName = 'wevtutil.exe'
+  $psi.Arguments = $arguments
+  $psi.UseShellExecute = $false
+  $psi.CreateNoWindow = $true
+  $psi.RedirectStandardOutput = $true
+  $psi.RedirectStandardError = $true
+  $p = [System.Diagnostics.Process]::Start($psi)
+  return @{ P = $p; Out = $p.StandardOutput.ReadToEndAsync(); Err = $p.StandardError.ReadToEndAsync() }
+}
+
 function Do-Collect([long]$since, [long]$until, [string[]]$ids) {
   if ($until -le $since) { Fail 'Конец периода раньше начала' }
   $f = [DateTimeOffset]::FromUnixTimeSeconds($since).UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss.000'Z'")
@@ -88,25 +100,43 @@ function Do-Collect([long]$since, [long]$until, [string[]]$ids) {
   $zip = $tmp + '.zip'
   New-Item -ItemType Directory -Path $tmp -Force | Out-Null
   try {
-    $i = 0; $saved = 0
+    # журналы выгружаются одновременно (по числу ядер, не больше 8), а не по очереди
+    $par = [Math]::Max(1, [Math]::Min(8, [Environment]::ProcessorCount))
+    $jobs = @()
+    $i = 0
     foreach ($id in $ids) {
       $i++
       $d = $LOGS[$id]
-      Say ('LOGATLAS-PROGRESS {0} {1} {2}' -f $i, $ids.Count, $d[1])
       $dest = Join-Path $tmp (($d[0] -replace '[\\/:*?"<>| ]', '_') + '.evtx')
-      $r = Invoke-Wev ('epl "{0}" "{1}" "/q:{2}" /ow:true' -f $d[0], $dest, $query)
-      if ($r.Code -ne 0) { Say ('LOGATLAS-RESULT err {0}|не удалось выгрузить (код {1}) {2}' -f $d[1], $r.Code, $r.Err.Trim()); continue }
-      $g = Invoke-Wev ('gli "{0}" /lf:true' -f $dest)
+      $jobs += @{ Id = $id; Label = $d[1]; Dest = $dest; I = $i; Args = ('epl "{0}" "{1}" "/q:{2}" /ow:true' -f $d[0], $dest, $query) }
+    }
+    $saved = 0
+    $running = New-Object System.Collections.ArrayList
+    $next = 0
+    while ($next -lt $jobs.Count -or $running.Count -gt 0) {
+      while ($next -lt $jobs.Count -and $running.Count -lt $par) {
+        $j = $jobs[$next]; $next++
+        Say ('LOGATLAS-PROGRESS {0} {1} {2}' -f $j.I, $jobs.Count, $j.Label)
+        $j.Run = Start-Wev $j.Args
+        [void]$running.Add($j)
+      }
+      $j = $running[0]
+      $j.Run.P.WaitForExit()
+      $running.RemoveAt(0)
+      $code = $j.Run.P.ExitCode
+      if ($code -ne 0) { Say ('LOGATLAS-RESULT err {0}|не удалось выгрузить (код {1}) {2}' -f $j.Label, $code, $j.Run.Err.Result.Trim()); continue }
+      $g = Invoke-Wev ('gli "{0}" /lf:true' -f $j.Dest)
       $n = $null
       if ($g.Out -match 'numberOfLogRecords:\s*(\d+)') { $n = [long]$Matches[1] }
-      if ($n -eq 0) { Remove-Item -LiteralPath $dest -Force; Say ('LOGATLAS-RESULT empty {0}' -f $d[1]); continue }
+      if ($n -eq 0) { Remove-Item -LiteralPath $j.Dest -Force; Say ('LOGATLAS-RESULT empty {0}' -f $j.Label); continue }
       $saved++
-      Say ('LOGATLAS-RESULT ok {0}|{1} событий, {2:N1} МБ' -f $d[1], $n, ((Get-Item -LiteralPath $dest).Length / 1MB))
+      Say ('LOGATLAS-RESULT ok {0}|{1} событий, {2:N1} МБ' -f $j.Label, $n, ((Get-Item -LiteralPath $j.Dest).Length / 1MB))
     }
     if ($saved -eq 0) { Fail 'За выбранный период событий нет' 12 }
     Say 'LOGATLAS-PROGRESS pack'
     Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
-    [System.IO.Compression.ZipFile]::CreateFromDirectory($tmp, $zip, [System.IO.Compression.CompressionLevel]::Optimal, $false)
+    # быстрое сжатие: по локальной сети лишние мегабайты дешевле минут упаковки
+    [System.IO.Compression.ZipFile]::CreateFromDirectory($tmp, $zip, [System.IO.Compression.CompressionLevel]::Fastest, $false)
     $fs = [IO.File]::OpenRead($zip)
     try { $fs.CopyTo($stdout); $stdout.Flush() } finally { $fs.Close() }
   } finally {

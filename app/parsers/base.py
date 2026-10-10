@@ -153,6 +153,9 @@ class Parser:
     label = "Файл"
     platform = "any"
     binary = False
+    # построчный формат без связи между строками: большой файл можно резать на куски
+    # и разбирать параллельно (см. ingest)
+    splittable = False
 
     @classmethod
     def sniff(cls, base: str, head: bytes) -> int:

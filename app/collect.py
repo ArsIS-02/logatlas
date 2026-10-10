@@ -29,7 +29,7 @@ KEYS_DIR = os.path.join(db.DATA_DIR, "keys")
 KEY = os.path.join(KEYS_DIR, "logatlas_ed25519")
 KNOWN_HOSTS = os.path.join(db.DATA_DIR, "known_hosts")
 HOSTS_FILE = os.path.join(db.DATA_DIR, "hosts.json")
-COLLECT_VERSION = "1.1"
+COLLECT_VERSION = "1.2"
 DEFAULT_USER = "logatlas-collect"
 OSES = ("linux", "macos", "windows")
 
@@ -374,8 +374,19 @@ def _run(cid: str, h: dict, command: str, tz: int):
     took = time.time() - t0
     if rc == 0 and size > 0:
         db.add_log(cid, "ok", f"Архив получен: {_human(size)}, сбор занял {int(took // 60)}:{int(took % 60):02d}")
+        if ext != "zip":                # сборщики 1.2 присылают tar без общего сжатия
+            with open(path, "rb") as f:
+                h0 = f.read(512)
+            if h0[:2] != b"\x1f\x8b" and h0[257:262] == b"ustar":
+                os.rename(path, path[: -len(".gz")])
+                path = path[: -len(".gz")]
+        w = ingest.worker()
+        ahead = w.q.qsize() + (1 if w.current else 0)
         db.set_case(cid, status="queued", stage="В очереди на разбор", progress=0)
-        ingest.worker().submit(cid, [path], tz, "fixed")
+        if ahead:
+            db.add_log(cid, "info", f"В очереди на разбор: сначала будут разобраны другие сборы ({ahead}) — "
+                                    "панель разбирает сборы по одному")
+        w.submit(cid, [path], tz, "fixed")
         return
     shutil.rmtree(updir, ignore_errors=True)
     if rc == 12:

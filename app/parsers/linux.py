@@ -261,6 +261,7 @@ class JournaldParser(Parser):
     name = "linux_journald"
     label = "journald"
     platform = "linux"
+    splittable = True
 
     @classmethod
     def sniff(cls, base, head):

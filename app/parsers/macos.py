@@ -127,6 +127,7 @@ class UnifiedParser(Parser):
     name = "macos_unified"
     label = "unified log"
     platform = "macos"
+    splittable = True       # только NDJSON; JSON-массив целиком (см. ingest)
 
     @classmethod
     def sniff(cls, base, head):

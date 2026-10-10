@@ -62,7 +62,7 @@ scan_json() {
     tv_min=$(find /var/db/diagnostics -name '*.tracev3' -exec stat -f %m {} + 2>/dev/null | sort -n | head -1)
     tv_max=$(date +%s)
   fi
-  printf '{"os":"macos","version":"1.1","host":%s,"tz_offset_min":%d,"tz_name":%s,"now":%d,"sources":[' \
+  printf '{"os":"macos","version":"1.2","host":%s,"tz_offset_min":%d,"tz_name":%s,"now":%d,"sources":[' \
     "$(jstr "$HOST")" "$OFFMIN" "$(jstr "$TZNAME")" "$(date +%s)"
   while IFS='|' read -r id label def desc globs; do
     [ -n "$id" ] || continue
@@ -89,12 +89,44 @@ scan_json() {
 # строки вида «2026-10-10 10:59:01…» (местное время) — отбор по первым 19 символам
 iso_filter() { awk -v s="$1" -v u="$2" '{ k = substr($0, 1, 19); if (k ~ /^[0-9]{4}-[0-9][0-9]-[0-9][0-9] [0-9:]{8}$/) keep = (k >= s && k <= u); if (keep) print }'; }
 
+# log show работает в один поток. Период режется на отрезки по числу ядер (не больше 8),
+# отрезки выгружаются одновременно и сразу сжимаются gzip -1.
+NPAR=$(sysctl -n hw.logicalcpu 2>/dev/null || echo 1); [ "$NPAR" -gt 8 ] && NPAR=8; [ "$NPAR" -lt 1 ] && NPAR=1
+
+unified_slices() {  # $1 каталог, $2 имя файла, $3 — «quiet», чтобы убрать шум
+  local dir="$1" base="$2" n=$NPAR step k a b cut
+  [ $((UNTIL - SINCE)) -lt 3600 ] && n=1
+  step=$(( (UNTIL - SINCE + n - 1) / n )); [ "$step" -lt 1 ] && step=1
+  k=0
+  while [ "$k" -lt "$n" ]; do
+    a=$((SINCE + k * step)); b=$((a + step)); [ "$b" -gt "$UNTIL" ] && b=$UNTIL
+    [ "$a" -ge "$b" ] && break
+    # секунда на границе попадает в оба отрезка — из этого отрезка её убираем
+    cut="$(lt "$b")"; [ "$b" -ge "$UNTIL" ] && cut="-"
+    if [ "${3:-}" = quiet ]; then
+      ( log show --start "$(lt "$a")" --end "$(lt "$b")" --style ndjson --info --predicate "$QUIET" 2>/dev/null \
+          | grep -vF -e "\"timestamp\":\"$cut" -e "\"timestamp\" : \"$cut" \
+          | gzip -1 > "$dir/$base-$(printf %02d "$k").ndjson.gz" ) &
+    else
+      ( log show --start "$(lt "$a")" --end "$(lt "$b")" --style ndjson --info 2>/dev/null \
+          | grep -vF -e "\"timestamp\":\"$cut" -e "\"timestamp\" : \"$cut" \
+          | gzip -1 > "$dir/$base-$(printf %02d "$k").ndjson.gz" ) &
+    fi
+    k=$((k + 1))
+  done
+  wait
+  for f in "$dir/$base"-*.ndjson.gz; do
+    [ -f "$f" ] && [ "$(gzip -dc "$f" | head -c 1 | wc -c | tr -d ' ')" = 0 ] && rm -f "$f"
+  done
+  return 0
+}
+
 collect_one() {  # $1 id, $2 каталог
   local id="$1" dir="$2" s u globs f
   s="$(lt "$SINCE")"; u="$(lt "$UNTIL")"
   case "$id" in
-    unified)      log show --start "$s" --end "$u" --style ndjson --info --predicate "$QUIET" > "$dir/unified.ndjson" 2>/dev/null ;;
-    unified_full) log show --start "$s" --end "$u" --style ndjson --info > "$dir/unified-full.ndjson" 2>/dev/null ;;
+    unified)      unified_slices "$dir" unified quiet ;;
+    unified_full) unified_slices "$dir" unified-full ;;
     pmset)        pmset -g log 2>/dev/null | iso_filter "$s" "$u" > "$dir/pmset.log" ;;
     install)
       for f in $(files_of "/var/log/install.log*"); do
@@ -138,7 +170,7 @@ for id in $IDS; do
   if [ -n "$(ls -A "$WORK/$id")" ]; then
     got=$((got + 1))
     kb=$(du -sk "$WORK/$id" | cut -f1)
-    result ok "${label}|${kb} КБ"
+    if ls "$WORK/$id" | grep -q '\.gz$'; then result ok "${label}|${kb} КБ сжато"; else result ok "${label}|${kb} КБ"; fi
   else
     rmdir "$WORK/$id"; echo "        нет записей за период" >&2
     result empty "${label}"
@@ -148,12 +180,15 @@ done
 
 if [ "$MODE" = stream ]; then
   progress pack
-  tar -czf - -C "$WORK" . >&3
+  # остальные файлы — тоже сжать по отдельности и параллельно; tar без общего сжатия,
+  # чтобы панель разбирала сжатые части на всех ядрах сразу
+  find "$WORK" -type f ! -name '*.gz' -print0 | xargs -0 -P "$NPAR" -n 4 gzip -1 2>/dev/null
+  tar -cf - -C "$WORK" . >&3
   exit 0
 fi
 
 DEST="${SUDO_USER:+/Users/$SUDO_USER}/Desktop"; DEST="${DEST:-$HOME/Desktop}"
 ARCHIVE="$DEST/${HOST}-logs-$(date +%Y%m%d-%H%M).tar.gz"
-tar -czf "$ARCHIVE" -C "$WORK" .
+tar -cf - -C "$WORK" . | gzip -1 > "$ARCHIVE"
 [ -n "${SUDO_USER:-}" ] && chown "$SUDO_USER" "$ARCHIVE"
 echo "Готово: $ARCHIVE ($(du -h "$ARCHIVE" | cut -f1))"
