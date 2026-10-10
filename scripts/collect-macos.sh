@@ -131,7 +131,7 @@ for id in $IDS; do
   i=$((i + 1))
   label="$(printf '%s\n' "$SRC_LIST" | awk -F'|' -v id="$id" '$1 == id { print $2 }')"
   progress "$i" "$n" "$label"
-  echo "  [$i/$n] $label…" >&2
+  echo "  [$i/$n] ${label}…" >&2
   mkdir -p "$WORK/$id"
   collect_one "$id" "$WORK/$id"
   if [ -n "$(ls -A "$WORK/$id")" ]; then got=$((got + 1)); else rmdir "$WORK/$id"; echo "        нет записей за период" >&2; fi

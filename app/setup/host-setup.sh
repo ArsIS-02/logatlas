@@ -30,7 +30,7 @@ home_of() {
 }
 
 if [ "${1:-}" = --remove ]; then
-  say "Удаляю пользователя $U, $D и $SUDOERS…"
+  say "Удаляю пользователя $U, $D и ${SUDOERS}…"
   rm -f "$SUDOERS"; rm -rf "$D"
   if id "$U" >/dev/null 2>&1; then
     if [ "$OS" = Darwin ]; then sysadminctl -deleteUser "$U" >/dev/null 2>&1 || dscl . -delete "/Users/$U"
@@ -53,7 +53,7 @@ FROM="$PANEL_IP,172.16.0.0/12,127.0.0.1,::1"
 
 # ------------------------------------------------------------------ пользователь
 if ! id "$U" >/dev/null 2>&1; then
-  say "Создаю пользователя $U…"
+  say "Создаю пользователя ${U}…"
   if [ "$OS" = Darwin ]; then
     pw="$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32)"
     sysadminctl -addUser "$U" -fullName "LogAtlas collector" -shell /bin/sh -home "/Users/$U" -password "$pw" >/dev/null 2>&1 \

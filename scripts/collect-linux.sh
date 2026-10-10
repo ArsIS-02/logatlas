@@ -463,7 +463,7 @@ if [ -n "$SOURCES_IN" ]; then
   for id in ${SOURCES_IN//,/ }; do
     if [ "$id" = all ]; then for x in "${AVAIL_IDS[@]}"; do SEL[$x]=1; done
     elif [ "${AVAIL[$id]:-0}" = 1 ]; then SEL[$id]=1
-    else warn "Журнал «$id» на хосте не найден — пропускаю"; fi
+    else warn "Журнал «${id}» на хосте не найден — пропускаю"; fi
   done
 fi
 
