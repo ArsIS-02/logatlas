@@ -3,6 +3,7 @@ import { api } from '../api.js';
 import { gantt } from '../charts.js';
 import { $, cssVar, fmtBytes, fmtN, fmtTime, h, mount, toast } from '../util.js';
 import { app } from '../app.js';
+import { stepsHtml, stepsSummary } from './progress.js';
 
 const PARSER_RU = {
   macos_unified: 'macOS unified log', macos_launchd: 'macOS launchd', macos_wifi: 'macOS wifi.log', macos_pmset: 'macOS pmset',
@@ -27,6 +28,9 @@ export async function renderSources(view, ctx) {
   const notes = c.summary?.notes || [];
   mount(view, h`
     ${notes.length ? h`<div class="note">${notes.join('; ')}</div>` : ''}
+    ${c.log && c.log.length ? h`<details class="steps-box panel-steps">
+      <summary>Журнал сбора <span class="muted">${stepsSummary(c)}</span></summary>
+      <div class="steps-scroll">${stepsHtml(c.log)}</div></details>` : ''}
     <section class="panel">
       <div class="panel-h"><h2>Покрытие по времени</h2><span class="sub">какой период охватывает каждый источник</span></div>
       <div class="chart" id="cov"></div>

@@ -27,6 +27,7 @@ done
 [ "$(id -u)" -eq 0 ] || { echo "Нужны права root: sudo bash $0" >&2; exit 1; }
 if [ -n "$MODE" ]; then exec 3>&1 1>&2; fi
 progress() { [ -n "$MODE" ] && printf 'LOGATLAS-PROGRESS %s\n' "$*" >&2; return 0; }
+result()   { [ -n "$MODE" ] && printf 'LOGATLAS-RESULT %s %s\n' "$1" "$2" >&2; return 0; }   # ok|empty|err, «журнал|подробности»
 
 HOST="$(scutil --get LocalHostName 2>/dev/null || hostname -s)"
 TZNAME="$(readlink /etc/localtime 2>/dev/null | sed 's|.*/zoneinfo/||')"
@@ -61,7 +62,7 @@ scan_json() {
     tv_min=$(find /var/db/diagnostics -name '*.tracev3' -exec stat -f %m {} + 2>/dev/null | sort -n | head -1)
     tv_max=$(date +%s)
   fi
-  printf '{"os":"macos","host":%s,"tz_offset_min":%d,"tz_name":%s,"now":%d,"sources":[' \
+  printf '{"os":"macos","version":"1.1","host":%s,"tz_offset_min":%d,"tz_name":%s,"now":%d,"sources":[' \
     "$(jstr "$HOST")" "$OFFMIN" "$(jstr "$TZNAME")" "$(date +%s)"
   while IFS='|' read -r id label def desc globs; do
     [ -n "$id" ] || continue
@@ -134,7 +135,14 @@ for id in $IDS; do
   echo "  [$i/$n] ${label}…" >&2
   mkdir -p "$WORK/$id"
   collect_one "$id" "$WORK/$id"
-  if [ -n "$(ls -A "$WORK/$id")" ]; then got=$((got + 1)); else rmdir "$WORK/$id"; echo "        нет записей за период" >&2; fi
+  if [ -n "$(ls -A "$WORK/$id")" ]; then
+    got=$((got + 1))
+    kb=$(du -sk "$WORK/$id" | cut -f1)
+    result ok "${label}|${kb} КБ"
+  else
+    rmdir "$WORK/$id"; echo "        нет записей за период" >&2
+    result empty "${label}"
+  fi
 done
 [ $got -gt 0 ] || { echo "За выбранный период записей нет." >&2; exit 12; }
 

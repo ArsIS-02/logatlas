@@ -228,6 +228,7 @@ export async function renderCollect(view, { id }) {
   const st = { tz: hostTz, preset: 72, nameEdited: false };
 
   mount(view, h`${head}
+    ${scan.outdated ? h`<div class="note">На хосте старая версия скрипта сбора: собрать можно, но результат по каждому журналу в «Ходе сбора» видно не будет. Повторите подготовку хоста (раздел «Хосты и сбор»), чтобы обновить скрипт.</div>` : ''}
     ${scan.os_mismatch ? h`<div class="note">На хосте обнаружена система «${OS_NAME[scan.os] || scan.os}», а в карточке указана «${OS_NAME[host.os]}». Исправьте карточку хоста.</div>` : ''}
     <p class="ink2 collect-meta">Имя на хосте: <b>${scan.host}</b> · часовой пояс хоста: <b>${tzLabel(hostTz)}</b>${scan.tz_name ? ` (${scan.tz_name})` : ''} · время на хосте: ${fmtIn(scan.now, hostTz)}</p>
     <div class="grid g-collect">

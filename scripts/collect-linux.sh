@@ -61,6 +61,7 @@ if [ -n "$MODE" ]; then
   B=''; D=''; G=''; Y=''; R=''; C=''; N=''
 fi
 progress() { [ -n "$MODE" ] && printf 'LOGATLAS-PROGRESS %s\n' "$*" >&2; return 0; }
+result()   { [ -n "$MODE" ] && printf 'LOGATLAS-RESULT %s %s\n' "$1" "$2" >&2; return 0; }   # ok|empty|err, «журнал|подробности»
 
 PY=''
 for p in python3 /usr/libexec/platform-python; do
@@ -443,7 +444,7 @@ for id in "${IDS[@]}"; do [ "${AVAIL[$id]}" = 1 ] && AVAIL_IDS+=("$id") && SEL[$
 if [ "$MODE" = scan ]; then
   jstr() { local v="${1//\\/\\\\}"; v="${v//\"/\\\"}"; printf '"%s"' "$v"; }
   {
-    printf '{"os":"linux","host":%s,"tz_offset_min":%d,"tz_name":%s,"now":%d,"python":%s,"sources":[' \
+    printf '{"os":"linux","version":"1.1","host":%s,"tz_offset_min":%d,"tz_name":%s,"now":%d,"python":%s,"sources":[' \
       "$(jstr "$HOST")" "$OFFMIN" "$(jstr "$TZNAME")" "$(date +%s)" "$([ -n "$PY" ] && echo true || echo false)"
     first=1
     for id in "${AVAIL_IDS[@]}"; do
@@ -552,9 +553,10 @@ for id in "${CHOSEN[@]}"; do
   find "$dir" -type f -empty -delete 2>/dev/null
   bytes=$(du -sb "$dir" 2>/dev/null | cut -f1); lines=$(find "$dir" -type f ! -name '*.gz' -exec cat {} + 2>/dev/null | wc -l)
   if [ -z "$(ls -A "$dir")" ]; then
-    rmdir "$dir"; say "${D}нет записей за период${N}"
+    rmdir "$dir"; say "${D}нет записей за период${N}"; result empty "${LABEL[$id]}"
   else
     got=$((got + 1)); say "${G}$(human "$bytes")${N} · $(printf "%'d" "$lines" 2>/dev/null || echo "$lines") строк"
+    result ok "${LABEL[$id]}|$(human "$bytes"), строк: $lines"
   fi
 done
 [ -z "$PY" ] && warn "  python3 не найден: текстовые журналы взяты целиком, без отбора по периоду."

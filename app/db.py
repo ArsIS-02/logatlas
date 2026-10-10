@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import threading
@@ -75,6 +76,9 @@ def init():
     ensure_dirs()
     with catalog() as c:
         c.executescript(CATALOG_SCHEMA)
+        cols = {r[1] for r in c.execute("PRAGMA table_info(cases)")}
+        if "log" not in cols:           # журнал шагов сбора и разбора (JSON-список)
+            c.execute("ALTER TABLE cases ADD COLUMN log TEXT")
         # дела, «зависшие» при перезапуске контейнера
         c.execute("UPDATE cases SET status='error', message='Обработка прервана перезапуском сервиса' "
                   "WHERE status IN ('processing','queued','collecting')")
@@ -105,6 +109,25 @@ def set_case(case_id, **kw):
     cols = ", ".join(f"{k}=?" for k in kw)
     with _lock, catalog() as c:
         c.execute(f"UPDATE cases SET {cols} WHERE id=?", (*kw.values(), case_id))
+
+
+LOG_MAX = 400
+
+
+def add_log(case_id, level, text):
+    """Шаг сбора/разбора для журнала на странице сбора. level: info, ok, warn, err."""
+    with _lock, catalog() as c:
+        r = c.execute("SELECT log FROM cases WHERE id=?", (case_id,)).fetchone()
+        if r is None:
+            return
+        try:
+            items = json.loads(r[0]) if r[0] else []
+        except ValueError:
+            items = []
+        items.append({"t": round(time.time(), 1), "l": level, "m": str(text)[:500]})
+        if len(items) > LOG_MAX:
+            items = items[:20] + [{"t": items[20]["t"], "l": "info", "m": "… часть записей пропущена …"}] + items[-(LOG_MAX - 21):]
+        c.execute("UPDATE cases SET log=? WHERE id=?", (json.dumps(items, ensure_ascii=False), case_id))
 
 
 def get_case(case_id):

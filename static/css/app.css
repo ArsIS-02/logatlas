@@ -421,6 +421,26 @@ pre.raw { font-family: var(--mono); font-size: 12px; background: var(--panel-2);
 .period-grid .field { width: 100%; }
 @media (max-width: 1000px) { .g-collect, .setup-grid { grid-template-columns: 1fr; } }
 
+/* журнал шагов сбора */
+.steps-box { text-align: left; margin-top: 22px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 10px 14px; }
+.steps-box summary { cursor: pointer; font-weight: 600; font-size: 13.5px; padding: 2px 0; }
+.steps-box summary .muted { font-weight: 400; font-size: 12.5px; margin-left: 8px; }
+.steps-scroll { max-height: 320px; overflow-y: auto; margin-top: 8px; }
+.panel-steps { margin: 0 0 18px; }
+.panel-steps .steps-scroll { max-height: 420px; }
+ol.steps { list-style: none; margin: 0; padding: 0; font-size: 12.5px; }
+ol.steps li { display: grid; grid-template-columns: 62px 16px 1fr; gap: 8px; align-items: baseline; padding: 4px 0; border-top: 1px solid var(--line); }
+ol.steps li:first-child { border-top: 0; }
+ol.steps time { color: var(--muted); font-variant-numeric: tabular-nums; font-family: var(--mono); font-size: 11.5px; }
+ol.steps i { font-style: normal; text-align: center; font-weight: 700; }
+ol.steps span { color: var(--ink); word-break: break-word; }
+.st-ok i::before { content: '✓'; color: var(--c-process); }
+.st-info i::before { content: '•'; color: var(--muted); }
+.st-warn i::before { content: '!'; color: var(--s-medium); }
+.st-err i::before { content: '✕'; color: var(--s-critical); }
+.st-err span { color: var(--s-critical); }
+.st-info span { color: var(--ink-2); }
+
 /* печать отчёта */
 .report { max-width: 980px; margin: 0 auto; }
 .report h1 { font: 600 28px var(--display); margin: 0 0 4px; }

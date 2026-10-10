@@ -63,12 +63,25 @@ def _case_or_404(cid):
     return c
 
 
+def _human(n):
+    for unit in ("Б", "КБ", "МБ", "ГБ"):
+        if n < 1024 or unit == "ГБ":
+            return (f"{n:.0f} {unit}" if unit == "Б" else f"{n:.1f} {unit}").replace(".", ",")
+        n /= 1024
+
+
 def _err(msg, code=400):
     return J({"error": msg}, status_code=code)
 
 
-def _case_public(c):
+def _case_public(c, with_log=False):
     c = dict(c)
+    raw_log = c.pop("log", None)
+    if with_log:
+        try:
+            c["log"] = json.loads(raw_log) if raw_log else []
+        except ValueError:
+            c["log"] = []
     c["tz_label"] = fmt_tz(c.get("tz") or 0)
     try:
         c["summary"] = json.loads(c["summary"]) if c.get("summary") else None
@@ -139,6 +152,8 @@ async def create_case(req: Request):
     for f in files:
         paths.append(await run_in_threadpool(save, f))
         await f.close()
+    total = sum(os.path.getsize(p) for p in paths)
+    db.add_log(cid, "info", f"Загружено через браузер: {len(paths)} файл(ов), {_human(total)}")
     db.set_case(cid, status="queued", stage="В очереди", progress=0)
     ingest.worker().submit(cid, paths, tz, tz_mode)
     return J({"id": cid})
@@ -151,7 +166,7 @@ def get_case(req):
         return _err("Сбор не найден", 404)
     with db.catalog() as cat:
         files = [dict(r) for r in cat.execute("SELECT * FROM files WHERE case_id=? ORDER BY id", (cid,))]
-    out = _case_public(c)
+    out = _case_public(c, with_log=True)
     out["files"] = files
     return J(out)
 
@@ -380,6 +395,7 @@ async def inbox_import(req: Request):
         with db.catalog() as c:
             c.execute("INSERT INTO cases(id,name,tz,tz_mode,created,updated,status,progress,stage) VALUES (?,?,?,?,?,?,?,?,?)",
                       (cid, name, tz, tz_mode, time.time(), time.time(), "queued", 0, "В очереди"))
+    db.add_log(cid, "info", f"Импорт из папки inbox: {len(paths)} файл(ов)")
     ingest.worker().submit(cid, paths, tz, tz_mode)
     return J({"id": cid})
 

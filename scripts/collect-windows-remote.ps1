@@ -11,7 +11,7 @@ LogAtlas: сбор журналов Windows по SSH для веб-панели 
 Скрипт только читает журналы. Файл сохранён в UTF-8 с BOM.
 #>
 $ErrorActionPreference = 'Stop'
-$VERSION = '1.0'
+$VERSION = '1.1'
 
 # id = канал, название, описание, собирать по умолчанию
 $LOGS = [ordered]@{
@@ -95,13 +95,13 @@ function Do-Collect([long]$since, [long]$until, [string[]]$ids) {
       Say ('LOGATLAS-PROGRESS {0} {1} {2}' -f $i, $ids.Count, $d[1])
       $dest = Join-Path $tmp (($d[0] -replace '[\\/:*?"<>| ]', '_') + '.evtx')
       $r = Invoke-Wev ('epl "{0}" "{1}" "/q:{2}" /ow:true' -f $d[0], $dest, $query)
-      if ($r.Code -ne 0) { Say ('  {0}: не удалось выгрузить (код {1}) {2}' -f $d[1], $r.Code, $r.Err.Trim()); continue }
+      if ($r.Code -ne 0) { Say ('LOGATLAS-RESULT err {0}|не удалось выгрузить (код {1}) {2}' -f $d[1], $r.Code, $r.Err.Trim()); continue }
       $g = Invoke-Wev ('gli "{0}" /lf:true' -f $dest)
       $n = $null
       if ($g.Out -match 'numberOfLogRecords:\s*(\d+)') { $n = [long]$Matches[1] }
-      if ($n -eq 0) { Remove-Item -LiteralPath $dest -Force; Say ('  {0}: нет событий за период' -f $d[1]); continue }
+      if ($n -eq 0) { Remove-Item -LiteralPath $dest -Force; Say ('LOGATLAS-RESULT empty {0}' -f $d[1]); continue }
       $saved++
-      Say ('  {0}: {1} событий' -f $d[1], $n)
+      Say ('LOGATLAS-RESULT ok {0}|{1} событий, {2:N1} МБ' -f $d[1], $n, ((Get-Item -LiteralPath $dest).Length / 1MB))
     }
     if ($saved -eq 0) { Fail 'За выбранный период событий нет' 12 }
     Say 'LOGATLAS-PROGRESS pack'

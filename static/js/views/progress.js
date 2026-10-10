@@ -1,20 +1,59 @@
-// Ход сбора и обработки
+// Ход сбора и обработки: кольцо прогресса и журнал шагов
 import { ring } from '../charts.js';
 import { fmtN, h, mount, raw } from '../util.js';
+
+const two = (n) => String(n).padStart(2, '0');
+const clock = (t) => { const d = new Date(t * 1000); return `${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`; };
+const dateTime = (t) => { const d = new Date(t * 1000); return `${two(d.getDate())}.${two(d.getMonth() + 1)}.${d.getFullYear()} ${two(d.getHours())}:${two(d.getMinutes())}`; };
+
+/** Список шагов: время, значок, текст */
+export function stepsHtml(log) {
+  if (!log || !log.length) return h`<p class="muted small-t">Шагов пока нет.</p>`;
+  return h`<ol class="steps">${log.map((e) => h`<li class="st-${e.l}"><time>${clock(e.t)}</time><i aria-hidden="true"></i><span>${e.m}</span></li>`)}</ol>`;
+}
+
+/** Итог по журналу шагов: когда, успешно ли, сколько длилось */
+export function stepsSummary(c) {
+  const log = c.log || [];
+  if (!log.length) return '';
+  const start = log[0].t;
+  const end = log[log.length - 1].t;
+  const sec = Math.max(0, Math.round(end - start));
+  const dur = sec >= 60 ? `${Math.floor(sec / 60)} мин ${sec % 60} с` : `${sec} с`;
+  const errs = log.filter((e) => e.l === 'err').length;
+  const warns = log.filter((e) => e.l === 'warn').length;
+  const state = c.status === 'error' || errs ? 'не удался' : c.status === 'ready' ? (warns ? `успешно, предупреждений: ${warns}` : 'успешно') : 'идёт';
+  return `${dateTime(start)} · ${state} · ${dur} · шагов: ${log.length}`;
+}
+
+function stepsPanel(c, open = true) {
+  return h`<details class="steps-box" ${open ? raw('open') : ''}>
+    <summary>Ход сбора <span class="muted">${stepsSummary(c)}</span></summary>
+    <div class="steps-scroll">${stepsHtml(c.log)}</div></details>`;
+}
+
+function scrollDown(view) {
+  const sc = view.querySelector('.steps-scroll');
+  if (sc) sc.scrollTop = sc.scrollHeight;
+}
 
 export function renderProgress(view, c) {
   if (c.status === 'error' && c.stage === 'Сбор не удался') {
     mount(view, h`<div class="progress-card">
       <div class="note err" style="text-align:left">Сбор с хоста не удался: ${c.message || 'неизвестная ошибка'}</div>
-      <div class="btn-row" style="justify-content:center"><a class="btn primary" href="#/hosts">К хостам</a><a class="btn" href="#/">К списку сборов</a></div>
+      ${stepsPanel(c)}
+      <div class="btn-row" style="justify-content:center;margin-top:16px"><a class="btn primary" href="#/hosts">К хостам</a><a class="btn" href="#/">К списку сборов</a></div>
       <p class="muted" style="font-size:12.5px">Этот сбор можно удалить корзиной в боковой панели.</p></div>`);
+    scrollDown(view);
     return;
   }
   if (c.status === 'error') {
     mount(view, h`<div class="progress-card">
       <div class="note err" style="text-align:left">Обработка не удалась: ${c.message || 'неизвестная ошибка'}</div>
+      ${stepsPanel(c)}
       <p class="ink2">Проверьте, что архив не повреждён, и загрузите его снова. Подробности — в журнале контейнера: <span class="mono">docker compose logs logatlas</span>.</p>
       <a class="btn" href="#/">К списку сборов</a></div>`);
+    scrollDown(view);
     return;
   }
   const p = Math.max(0.02, c.progress || 0);
@@ -24,15 +63,34 @@ export function renderProgress(view, c) {
     const circ = 2 * Math.PI * 60;
     fg.setAttribute('stroke-dashoffset', String(circ * (1 - p)));
     existing.querySelector('.pct').textContent = `${Math.round(p * 100)}%`;
+    existing.querySelector('h2').textContent = title(c);
     existing.querySelector('.stage').textContent = c.stage || '';
     existing.querySelector('.count').textContent = c.events ? `${fmtN(c.events)} событий` : '';
+    const box = existing.querySelector('.steps-box');
+    const n = (c.log || []).length;
+    if (box && +box.dataset.n !== n) {
+      const sc = box.querySelector('.steps-scroll');
+      const atBottom = sc.scrollHeight - sc.scrollTop - sc.clientHeight < 40;
+      mount(sc, stepsHtml(c.log));
+      box.querySelector('summary .muted').textContent = stepsSummary(c);
+      box.dataset.n = n;
+      if (atBottom) sc.scrollTop = sc.scrollHeight;
+    }
     return;
   }
   mount(view, h`<div class="progress-card" data-live>
     ${raw(ring(p))}
-    <h2>${{ queued: 'Сбор в очереди на разбор', collecting: 'Собираю журналы с хоста' }[c.status] || 'Разбираю журналы'}</h2>
+    <h2>${title(c)}</h2>
     <div class="stage">${c.stage || ''}</div>
     <div class="count">${c.events ? `${fmtN(c.events)} событий` : ''}</div>
-    <p class="muted" style="font-size:13px;margin-top:18px">Страницу можно закрыть — обработка продолжится на сервере.</p>
+    ${stepsPanel(c)}
+    <p class="muted" style="font-size:13px;margin-top:18px">Страницу можно закрыть — сбор и обработка продолжатся на сервере.</p>
   </div>`);
+  const box = view.querySelector('.steps-box');
+  if (box) box.dataset.n = (c.log || []).length;
+  scrollDown(view);
+}
+
+function title(c) {
+  return { queued: 'Сбор в очереди на разбор', collecting: 'Собираю журналы с хоста' }[c.status] || 'Разбираю журналы';
 }

@@ -29,7 +29,7 @@ KEYS_DIR = os.path.join(db.DATA_DIR, "keys")
 KEY = os.path.join(KEYS_DIR, "logatlas_ed25519")
 KNOWN_HOSTS = os.path.join(db.DATA_DIR, "known_hosts")
 HOSTS_FILE = os.path.join(db.DATA_DIR, "hosts.json")
-COLLECT_VERSION = "1.0"
+COLLECT_VERSION = "1.1"
 DEFAULT_USER = "logatlas-collect"
 OSES = ("linux", "macos", "windows")
 
@@ -229,6 +229,7 @@ def scan(hid: str) -> dict:
         raise RuntimeError("Хост вернул непонятный ответ: " + out[:200]) from None
     if data.get("os") and data["os"] != h["os"]:
         data["os_mismatch"] = True
+    data["outdated"] = str(data.get("version") or "1.0") != COLLECT_VERSION
     _set_scan(hid, {"at": time.time(), "ok": True, "os": data.get("os"), "host": data.get("host"),
                     "tz_offset_min": data.get("tz_offset_min"), "tz_name": data.get("tz_name"),
                     "sources": len(data.get("sources") or [])})
@@ -283,6 +284,10 @@ def start(body: dict) -> str:
         c.execute("INSERT INTO cases(id,name,platform,host,tz,tz_mode,created,updated,status,progress,stage) "
                   "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                   (cid, name, h["os"], h["name"], tz, "fixed", now, now, "collecting", 0.01, "Подключение к хосту…"))
+    def _f(e):
+        return time.strftime("%d.%m.%Y %H:%M", time.gmtime(e + tz * 60))
+    db.add_log(cid, "info", f"Сбор запущен из панели: журналов {len(sources)} ({', '.join(sources)}), "
+                            f"период {_f(since)} — {_f(until)} (UTC{'+' if tz >= 0 else '-'}{abs(tz) // 60:02d}:{abs(tz) % 60:02d})")
     command = f"collect {since} {until} {','.join(sources)}"
     threading.Thread(target=_run, args=(cid, h, command, tz), daemon=True, name=f"collect-{cid}").start()
     return cid
@@ -294,8 +299,11 @@ def _run(cid: str, h: dict, command: str, tz: int):
     ext = "zip" if h["os"] == "windows" else "tar.gz"
     safe = re.sub(r"[^\w.-]+", "_", h["name"])[:60] or "host"
     path = os.path.join(updir, f"{int(time.time() * 1000)}_{safe}-logs.{ext}")
-    state = {"stage": "Подключение к хосту…", "progress": 0.02, "done": False}
+    state = {"stage": "Подключение к хосту…", "progress": 0.02, "done": False, "connected": False}
     tail: list[str] = []
+    t0 = time.time()
+    os_name = {"linux": "Linux", "macos": "macOS", "windows": "Windows"}.get(h["os"], h["os"])
+    db.add_log(cid, "info", f"Подключение по SSH: {h['user']}@{h['address']}:{h['port']} ({os_name}), ключ панели")
 
     def monitor():
         last = None
@@ -315,16 +323,31 @@ def _run(cid: str, h: dict, command: str, tz: int):
             mon.start()
             for raw_line in p.stderr:
                 line = raw_line.decode("utf-8", "replace").rstrip()
-                if line.startswith("LOGATLAS-PROGRESS "):
+                if line.startswith("LOGATLAS-") and not state["connected"]:
+                    state["connected"] = True
+                    db.add_log(cid, "ok", f"Подключено, хост начал сбор (через {time.time() - t0:.0f} с)")
+                if line.startswith("LOGATLAS-RESULT "):
+                    parts = line.split(" ", 2)
+                    status = parts[1] if len(parts) > 1 else ""
+                    label, _, detail = (parts[2] if len(parts) > 2 else "").partition("|")
+                    if status == "ok":
+                        db.add_log(cid, "ok", f"{label}: {detail}" if detail else label)
+                    elif status == "empty":
+                        db.add_log(cid, "info", f"{label}: нет записей за период")
+                    else:
+                        db.add_log(cid, "warn", f"{label}: {detail or 'не удалось собрать'}")
+                elif line.startswith("LOGATLAS-PROGRESS "):
                     parts = line.split(" ", 3)
                     if parts[1] == "pack":
                         state["stage"] = "Упаковка и передача архива"
                         state["progress"] = 0.09
+                        db.add_log(cid, "info", "Упаковка архива на хосте и передача в панель")
                     elif len(parts) >= 3 and parts[1].isdigit() and parts[2].isdigit():
                         i, n = int(parts[1]), max(1, int(parts[2]))
                         label = parts[3] if len(parts) > 3 else ""
                         state["stage"] = f"Сбор на хосте: {i} из {n} — {label}"
                         state["progress"] = 0.02 + 0.07 * (i - 1) / n
+                        db.add_log(cid, "info", f"Собираю «{label}» ({i} из {n})…")
                 elif line.strip():
                     tail.append(line)
                     del tail[:-40]
@@ -344,7 +367,9 @@ def _run(cid: str, h: dict, command: str, tz: int):
         shutil.rmtree(updir, ignore_errors=True)
         return
     size = os.path.getsize(path) if os.path.exists(path) else 0
+    took = time.time() - t0
     if rc == 0 and size > 0:
+        db.add_log(cid, "ok", f"Архив получен: {_human(size)}, сбор занял {int(took // 60)}:{int(took % 60):02d}")
         db.set_case(cid, status="queued", stage="В очереди на разбор", progress=0)
         ingest.worker().submit(cid, [path], tz, "fixed")
         return
@@ -355,6 +380,7 @@ def _run(cid: str, h: dict, command: str, tz: int):
         msg = "Сбор остановлен."
     else:
         msg = explain(rc, "\n".join(tail), h)
+    db.add_log(cid, "err", msg)
     db.set_case(cid, status="error", stage="Сбор не удался", message=msg)
 
 

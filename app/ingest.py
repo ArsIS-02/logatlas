@@ -180,6 +180,7 @@ class Worker:
             except Exception as e:  # noqa: BLE001
                 log.exception("ingest failed")
                 db.set_case(job[0], status="error", message=f"{type(e).__name__}: {e}")
+                db.add_log(job[0], "err", f"Разбор не удался: {type(e).__name__}: {e}")
             finally:
                 self.current = None
 
@@ -206,6 +207,9 @@ def run_ingest(case_id, paths, tz_default, tz_mode):
         tz_mode = "fixed"
     db.set_case(case_id, status="processing", progress=0.01, stage="Распаковка и разбор", message=None)
     total = sum(os.path.getsize(p) for p in paths) or 1
+    db.add_log(case_id, "info", f"Разбор: распаковка и определение формата ({len(paths)} файл(ов) на входе)")
+    logged_files = 0
+    skipped_files = 0
     done_bytes = 0
     tmpdir = tempfile.mkdtemp(dir=db.TMP_DIR)
     con = db.case_db(case_id, write=True)
@@ -237,6 +241,7 @@ def run_ingest(case_id, paths, tz_default, tz_mode):
                         with db.catalog() as c:
                             c.execute("UPDATE files SET status='skipped', error=? WHERE id=?",
                                       ("Двоичный или неизвестный формат", file_id))
+                        skipped_files += 1
                         continue
                     ctx = Ctx(src, anchor, tmpdir)
                     parser = parser_cls()
@@ -276,10 +281,23 @@ def run_ingest(case_id, paths, tz_default, tz_mode):
                         c.execute("UPDATE files SET label=?, platform=?, events=?, noise=?, bad=?, status=?, error=? "
                                   "WHERE id=?", (label, ctx.platform or parser_cls.platform, cnt, ctx.noise, ctx.bad,
                                                  "error" if err and not cnt else "ok", err, file_id))
+                    logged_files += 1
+                    if err and not cnt:
+                        db.add_log(case_id, "warn", f"{src.name.removeprefix('./')}: ошибка разбора — {err}")
+                    elif logged_files <= 60:
+                        n_fmt = f"{cnt:,}".replace(",", " ")
+                        db.add_log(case_id, "ok", f"{src.name.removeprefix('./')}: {getattr(parser_cls, 'label', '') or parser_cls.name} — {n_fmt} событий")
                 done_bytes += st.st_size
 
         # --- пост-обработка -------------------------------------------------------
+        if logged_files > 60:
+            db.add_log(case_id, "ok", f"… и ещё {logged_files - 60} файл(ов)")
+        if skipped_files:
+            db.add_log(case_id, "warn", f"Пропущено файлов неизвестного формата: {skipped_files} (список — во вкладке «Источники»)")
+        for n in notes:
+            db.add_log(case_id, "warn", n)
         db.set_case(case_id, progress=0.9, stage="Часовой пояс и индексы", events=n_events)
+        db.add_log(case_id, "info", "Часовой пояс, индексы и правила обнаружения")
         tz = tz_default
         if tz_mode == "auto" and first_load:
             nz = [(k, v) for k, v in tz_votes.items() if k is not None]
@@ -320,6 +338,11 @@ def run_ingest(case_id, paths, tz_default, tz_mode):
                     tz=tz, platform=platform, host=host, summary=json.dumps(summary, ensure_ascii=False),
                     message="; ".join(notes) if notes else None)
         log.info("case %s ingested: %s events in %.1fs", case_id, tot[0], time.time() - t_start)
+        took = time.time() - t_start
+        rules = con.execute("SELECT count(DISTINCT rule) FROM findings").fetchone()[0]
+        n_fmt = f"{tot[0]:,}".replace(",", " ")
+        db.add_log(case_id, "ok", f"Готово: {n_fmt} событий, сработало правил обнаружения: {rules}, "
+                                  f"разбор занял {int(took // 60)}:{int(took % 60):02d}")
     finally:
         con.close()
         shutil.rmtree(tmpdir, ignore_errors=True)
