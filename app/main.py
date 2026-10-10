@@ -20,12 +20,12 @@ from starlette.responses import FileResponse, JSONResponse, Response, StreamingR
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from . import analytics, db, detections, ingest
+from . import analytics, collect, db, detections, ingest
 from .parsers import SUPPORTED
 from .parsers.base import CATEGORIES
 from .timeutil import fmt_tz, ms_to_str
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 STATIC = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
 log = logging.getLogger("logatlas")
 
@@ -113,9 +113,9 @@ async def create_case(req: Request):
     if cid:
         case = db.get_case(cid)
         if not case:
-            return _err("Дело не найдено", 404)
+            return _err("Сбор не найден", 404)
         if case["status"] in ("processing", "queued"):
-            return _err("Дело ещё обрабатывается")
+            return _err("Сбор ещё обрабатывается")
     else:
         cid = uuid.uuid4().hex[:10]
         if not name:
@@ -148,7 +148,7 @@ def get_case(req):
     cid = req.path_params["cid"]
     c = _case_or_404(cid)
     if not c:
-        return _err("Дело не найдено", 404)
+        return _err("Сбор не найден", 404)
     with db.catalog() as cat:
         files = [dict(r) for r in cat.execute("SELECT * FROM files WHERE case_id=? ORDER BY id", (cid,))]
     out = _case_public(c)
@@ -169,9 +169,10 @@ def delete_case(req):
     cid = req.path_params["cid"]
     c = db.get_case(cid)
     if not c:
-        return _err("Дело не найдено", 404)
+        return _err("Сбор не найден", 404)
     if ingest.WORKER and ingest.WORKER.current == cid:
-        return _err("Дело сейчас обрабатывается — удалите после завершения")
+        return _err("Сбор сейчас разбирается — удалите после завершения")
+    collect.cancel(cid)
     with db.catalog() as cat:
         cat.execute("DELETE FROM files WHERE case_id=?", (cid,))
         cat.execute("DELETE FROM cases WHERE id=?", (cid,))
@@ -189,9 +190,9 @@ def _with_case(fn):
         cid = req.path_params["cid"]
         c = db.get_case(cid)
         if not c:
-            return _err("Дело не найдено", 404)
+            return _err("Сбор не найден", 404)
         if not os.path.exists(db.case_path(cid)):
-            return _err("Данные дела ещё не готовы", 409)
+            return _err("Данные сбора ещё не готовы", 409)
         con = db.case_db(cid)
         try:
             return fn(req, con, c)
@@ -274,7 +275,7 @@ def do_search(req, con, case):
 def export_csv(req):
     cid = req.path_params["cid"]
     if not db.get_case(cid):
-        return _err("Дело не найдено", 404)
+        return _err("Сбор не найден", 404)
     t0, t1 = _rng(req)
     q = req.query_params.get("q", "")
 
@@ -325,7 +326,7 @@ def get_context(req, con, case):
 async def ioc(req: Request):
     cid = req.path_params["cid"]
     if not db.get_case(cid):
-        return _err("Дело не найдено", 404)
+        return _err("Сбор не найден", 404)
     body = await req.json()
     iocs = body.get("iocs") or []
     if isinstance(iocs, str):
@@ -372,7 +373,7 @@ async def inbox_import(req: Request):
     cid = body.get("case_id")
     if cid:
         if not db.get_case(cid):
-            return _err("Дело не найдено", 404)
+            return _err("Сбор не найден", 404)
     else:
         cid = uuid.uuid4().hex[:10]
         name = body.get("name") or (os.path.basename(paths[0]) if len(paths) == 1 else f"Импорт из inbox ({len(paths)})")
@@ -380,6 +381,100 @@ async def inbox_import(req: Request):
             c.execute("INSERT INTO cases(id,name,tz,tz_mode,created,updated,status,progress,stage) VALUES (?,?,?,?,?,?,?,?,?)",
                       (cid, name, tz, tz_mode, time.time(), time.time(), "queued", 0, "В очереди"))
     ingest.worker().submit(cid, paths, tz, tz_mode)
+    return J({"id": cid})
+
+
+# ---------------------------------------------------------------------------
+# сбор с хостов
+def _panel_host(req: Request) -> str:
+    host = (req.headers.get("host") or "").strip()
+    if host.startswith("["):
+        host = host[1:].split("]", 1)[0]
+    else:
+        host = host.rsplit(":", 1)[0] if host.count(":") == 1 else host
+    return host if collect.RE_ADDR.fullmatch(host or "") else ""
+
+
+def _base(req: Request) -> str:
+    host = req.headers.get("host") or ""
+    return f"{req.url.scheme}://{host}" if re.fullmatch(r"[A-Za-z0-9.\-:\[\]]+", host) else ""
+
+
+def collect_info(req):
+    base = _base(req)
+    return J({
+        "available": collect.available(), "pubkey": collect.pubkey(), "user": collect.DEFAULT_USER,
+        "panel_host": _panel_host(req), "base": base,
+        "commands": {
+            "unix": f"curl -fsSL {base}/setup/host.sh | sudo bash",
+            "unix_remove": f"curl -fsSL {base}/setup/host.sh | sudo bash -s -- --remove",
+            "windows": f"iex (iwr -UseBasicParsing {base}/setup/windows.ps1).Content",
+            "windows_remove": f"$env:LOGATLAS_REMOVE=1; iex (iwr -UseBasicParsing {base}/setup/windows.ps1).Content",
+        },
+    })
+
+
+def setup_script(req):
+    kind = req.path_params["kind"]
+    if kind not in ("host.sh", "windows.ps1"):
+        return Response("not found", status_code=404)
+    try:
+        text = collect.setup_script("host" if kind == "host.sh" else "windows", _base(req), _panel_host(req))
+    except (OSError, RuntimeError) as e:
+        return Response(f"echo 'LogAtlas: {e}'\n", media_type="text/plain; charset=utf-8", status_code=503)
+    return Response(text, media_type="text/plain; charset=utf-8", headers={"Cache-Control": "no-store"})
+
+
+def hosts_list(req):
+    return J(collect.list_hosts())
+
+
+async def hosts_add(req: Request):
+    try:
+        return J(collect.add_host(await req.json()))
+    except ValueError as e:
+        return _err(str(e))
+
+
+async def hosts_update(req: Request):
+    try:
+        return J(collect.update_host(req.path_params["hid"], await req.json()))
+    except KeyError:
+        return _err("Хост не найден", 404)
+    except ValueError as e:
+        return _err(str(e))
+
+
+def hosts_delete(req):
+    try:
+        collect.delete_host(req.path_params["hid"])
+    except KeyError:
+        return _err("Хост не найден", 404)
+    return J({"ok": True})
+
+
+async def hosts_scan(req):
+    try:
+        return J(await run_in_threadpool(collect.scan, req.path_params["hid"]))
+    except KeyError:
+        return _err("Хост не найден", 404)
+    except RuntimeError as e:
+        return _err(str(e), 502)
+
+
+def hosts_hostkey(req):
+    try:
+        collect.reset_hostkey(req.path_params["hid"])
+    except KeyError:
+        return _err("Хост не найден", 404)
+    return J({"ok": True})
+
+
+async def collect_start(req: Request):
+    try:
+        cid = collect.start(await req.json())
+    except ValueError as e:
+        return _err(str(e))
     return J({"id": cid})
 
 
@@ -410,6 +505,15 @@ routes = [
     Route("/api/cases/{cid}/ioc", ioc, methods=["POST"]),
     Route("/api/inbox", inbox),
     Route("/api/inbox/import", inbox_import, methods=["POST"]),
+    Route("/api/collect/info", collect_info),
+    Route("/api/collect", collect_start, methods=["POST"]),
+    Route("/api/hosts", hosts_list, methods=["GET"]),
+    Route("/api/hosts", hosts_add, methods=["POST"]),
+    Route("/api/hosts/{hid}", hosts_update, methods=["PUT"]),
+    Route("/api/hosts/{hid}", hosts_delete, methods=["DELETE"]),
+    Route("/api/hosts/{hid}/scan", hosts_scan, methods=["POST"]),
+    Route("/api/hosts/{hid}/hostkey", hosts_hostkey, methods=["DELETE"]),
+    Route("/setup/{kind}", setup_script),
     Mount("/static", NoCacheStatic(directory=STATIC), name="static"),
 ]
 
@@ -418,6 +522,10 @@ def create_app():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     db.init()
     ingest.worker()
+    try:
+        collect.ensure_key()
+    except Exception:  # noqa: BLE001
+        logging.getLogger("logatlas").exception("cannot create panel key")
     return Starlette(routes=routes, middleware=[Middleware(GZipMiddleware, minimum_size=2048)])
 
 

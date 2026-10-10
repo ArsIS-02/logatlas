@@ -15,7 +15,7 @@ export const SEV = {
 export const SEV_KEYS = Object.keys(SEV);
 
 export const PLATFORMS = {
-  all: { name: 'Все дела' },
+  all: { name: 'Все сборы' },
   macos: { name: 'macOS' },
   windows: { name: 'Windows' },
   linux: { name: 'Linux' },

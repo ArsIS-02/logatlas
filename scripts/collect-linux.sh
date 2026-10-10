@@ -12,6 +12,8 @@
 #   --yes                          не задавать вопросов
 #   --client                       режим для collect-linux-remote: архив в ~/logatlas-collect пользователя sudo,
 #                                  коды выхода 0 — отправлено, 10 — архив готов, но не отправлен, 11 — отменено, 12 — нет записей
+#   --scan-json                    для веб-панели LogAtlas: найденные журналы в JSON (stdout)
+#   --stream                       для веб-панели LogAtlas: архив tar.gz в stdout, ход сбора — строки LOGATLAS-PROGRESS в stderr
 set -uo pipefail
 shopt -s nullglob
 
@@ -33,9 +35,11 @@ die()  { printf '%s\n' "${R}$*${N}" >&2; exit "${2:-1}"; }
 ask()  { local __v; read -r -p "$1" __v </dev/tty || __v=''; printf '%s' "$__v"; }
 
 # ------------------------------------------------------------------ параметры
-SINCE_IN=''; UNTIL_IN=''; SOURCES_IN=''; UPLOAD="${LOGATLAS_URL:-}"; OUTDIR=''; YES=0; CLIENT=0; LEGACY_DAYS=''
+SINCE_IN=''; UNTIL_IN=''; SOURCES_IN=''; UPLOAD="${LOGATLAS_URL:-}"; OUTDIR=''; YES=0; CLIENT=0; LEGACY_DAYS=''; MODE=''
 while [ $# -gt 0 ]; do
   case "$1" in
+    --scan-json) MODE=scan; YES=1 ;;
+    --stream)  MODE=stream; YES=1; UPLOAD='' ;;
     --since)   SINCE_IN="${2:-}"; shift ;;
     --until)   UNTIL_IN="${2:-}"; shift ;;
     --sources) SOURCES_IN="${2:-}"; shift ;;
@@ -51,6 +55,12 @@ while [ $# -gt 0 ]; do
 done
 [ "$(id -u)" -eq 0 ] || die "Нужны права root: sudo bash $0"
 [ -t 0 ] || [ -e /dev/tty ] || YES=1
+# для веб-панели: данные идут в fd 3 (исходный stdout), всё остальное — в stderr, без цветов
+if [ -n "$MODE" ]; then
+  exec 3>&1 1>&2
+  B=''; D=''; G=''; Y=''; R=''; C=''; N=''
+fi
+progress() { [ -n "$MODE" ] && printf 'LOGATLAS-PROGRESS %s\n' "$*" >&2; return 0; }
 
 PY=''
 for p in python3 /usr/libexec/platform-python; do
@@ -376,6 +386,7 @@ choose_sources() {
 parse_time() {
   local s="$1" t
   s="$(printf '%s' "$s" | sed 's/^ *//; s/ *$//')"
+  if [[ "$s" =~ ^@[0-9]{9,11}$ ]]; then printf '%s\n' "${s#@}"; return; fi
   case "$s" in
     now|сейчас)        date +%s; return ;;
     today|сегодня)     date -d 'today 00:00' +%s; return ;;
@@ -426,9 +437,26 @@ say "${B}LogAtlas — сбор журналов Linux${N}"
 say "${D}Поиск журналов…${N}"
 discover
 for id in "${IDS[@]}"; do [ "${AVAIL[$id]}" = 1 ] && AVAIL_IDS+=("$id") && SEL[$id]="${DEF[$id]}"; done
-[ ${#AVAIL_IDS[@]} -gt 0 ] || die "На хосте не найдено ни одного известного журнала." 12
 # messages включаем по умолчанию, только если нет journald
 [ "${AVAIL[journal]}" = 1 ] || { [ "${AVAIL[messages]}" = 1 ] && SEL[messages]=1; }
+
+if [ "$MODE" = scan ]; then
+  jstr() { local v="${1//\\/\\\\}"; v="${v//\"/\\\"}"; printf '"%s"' "$v"; }
+  {
+    printf '{"os":"linux","host":%s,"tz_offset_min":%d,"tz_name":%s,"now":%d,"python":%s,"sources":[' \
+      "$(jstr "$HOST")" "$OFFMIN" "$(jstr "$TZNAME")" "$(date +%s)" "$([ -n "$PY" ] && echo true || echo false)"
+    first=1
+    for id in "${AVAIL_IDS[@]}"; do
+      [ $first = 1 ] || printf ','; first=0
+      printf '{"id":%s,"label":%s,"desc":%s,"size":%d,"first":%s,"last":%s,"default":%s}' \
+        "$(jstr "$id")" "$(jstr "${LABEL[$id]}")" "$(jstr "${DESC[$id]}")" "${SIZE[$id]:-0}" \
+        "${FIRST[$id]:-null}" "${LAST[$id]:-null}" "$([ "${SEL[$id]}" = 1 ] && echo true || echo false)"
+    done
+    printf ']}\n'
+  } >&3
+  exit 0
+fi
+[ ${#AVAIL_IDS[@]} -gt 0 ] || die "На хосте не найдено ни одного известного журнала." 12
 
 if [ -n "$SOURCES_IN" ]; then
   for id in "${AVAIL_IDS[@]}"; do SEL[$id]=0; done
@@ -456,7 +484,9 @@ CHOSEN=(); for id in "${AVAIL_IDS[@]}"; do [ "${SEL[$id]}" = 1 ] && CHOSEN+=("$i
 if [ ${#CHOSEN[@]} -eq 0 ]; then warn "Не выбрано ни одного журнала."; exit 11; fi
 
 # куда класть архив
-if [ -z "$OUTDIR" ]; then
+if [ "$MODE" = stream ]; then
+  OUTDIR=/var/tmp
+elif [ -z "$OUTDIR" ]; then
   h="${HOME:-/root}"
   [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ] && h="$(getent passwd "$SUDO_USER" | cut -d: -f6)"
   if [ $CLIENT = 1 ] && [ -n "$h" ] && [ -d "$h" ]; then
@@ -467,7 +497,7 @@ if [ -z "$OUTDIR" ]; then
     OUTDIR="$PWD"
   fi
 fi
-mkdir -p "$OUTDIR" || die "Не удалось создать папку $OUTDIR"
+[ "$MODE" = stream ] || mkdir -p "$OUTDIR" || die "Не удалось создать папку $OUTDIR"
 ARCHIVE="$OUTDIR/${HOST}-logs-$(date -d "@$SINCE" +%Y%m%d-%H%M)_$(date -d "@$UNTIL" +%Y%m%d-%H%M).tar.gz"
 CASE="${HOST} · $(fmtd "$SINCE") – $(fmtd "$UNTIL") (${OFFTXT})"
 
@@ -494,6 +524,7 @@ say "${B}Сбор${N}  ${D}(временная папка ${WORK})${N}"
 i=0; got=0
 for id in "${CHOSEN[@]}"; do
   i=$((i + 1))
+  progress "$i" "${#CHOSEN[@]}" "${LABEL[$id]}"
   printf "  [%d/%d] %s " "$i" "${#CHOSEN[@]}" "$(pad "${LABEL[$id]}" 18)"
   dir="$WORK/$id"; mkdir -p "$dir"
   case "$id" in
@@ -528,6 +559,12 @@ for id in "${CHOSEN[@]}"; do
 done
 [ -z "$PY" ] && warn "  python3 не найден: текстовые журналы взяты целиком, без отбора по периоду."
 if [ $got -eq 0 ]; then warn "За выбранный период записей нет — архив не создан."; exit 12; fi
+
+if [ "$MODE" = stream ]; then
+  progress pack
+  tar -czf - -C "$WORK" . >&3 || die "Не удалось упаковать журналы"
+  exit 0
+fi
 
 say ""
 printf "  Упаковка… "

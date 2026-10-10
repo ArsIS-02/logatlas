@@ -1,4 +1,4 @@
-// Главная: загрузка журналов, форматы по платформам, список дел, импорт из папки inbox
+// Главная: загрузка журналов, форматы по платформам, список сборов, импорт из папки inbox
 import { api } from '../api.js';
 import { $, $$, fmtBytes, fmtN, fmtTime, h, mount, platIcon, platName, raw, toast } from '../util.js';
 
@@ -50,8 +50,9 @@ export async function renderHome(view, { platform, cases, meta, refresh }) {
           <label class="btn primary" for="files">Выбрать файлы</label>
           <input id="files" type="file" multiple class="hidden">
           <label class="btn" for="folder">Выбрать папку</label>
+          <a class="btn" href="#/hosts">Собрать с хоста…</a>
           <input id="folder" type="file" webkitdirectory multiple class="hidden">
-          <label class="lbl">Название дела<input class="field" id="cname" placeholder="например, mbp-design-07, 9 октября" style="width:260px"></label>
+          <label class="lbl">Название сбора<input class="field" id="cname" placeholder="например, mbp-design-07, 9 октября" style="width:260px"></label>
           <label class="lbl">Часовой пояс хоста
             <select class="field" id="tzmode"><option value="auto">Определить по журналам</option><option value="fixed">Указать вручную</option></select></label>
           <label class="lbl hidden" id="tzwrap">Пояс<select class="field" id="tz">${raw(tzOptions())}</select></label>
@@ -68,7 +69,7 @@ export async function renderHome(view, { platform, cases, meta, refresh }) {
       </div>`)}
     </div>
 
-    <h2 class="section-h">${platform === 'all' ? 'Все дела' : `Дела: ${platName(platform)}`}</h2>
+    <h2 class="section-h">${platform === 'all' ? 'Все сборы' : `Сборы: ${platName(platform)}`}</h2>
     ${list.length ? h`<div class="case-tools">
       <label class="pick-all"><input type="checkbox" id="pick-all"> Выбрать все</label>
       <span class="muted" id="pick-n"></span>
@@ -76,21 +77,21 @@ export async function renderHome(view, { platform, cases, meta, refresh }) {
     </div>` : ''}
     <div class="case-rows" id="case-rows">
       ${list.length ? list.map((c) => h`<a class="case-row" href="#/c/${c.id}/overview" data-id="${c.id}">
-        <input type="checkbox" class="pick" data-id="${c.id}" aria-label="${`Выбрать дело «${c.name}»`}">
+        <input type="checkbox" class="pick" data-id="${c.id}" aria-label="${`Выбрать сбор «${c.name}»`}">
         <span class="ink2">${raw(platIcon(c.platform))}</span>
         <span title="${c.name}"><span class="nm">${c.name}</span><span class="sm">${c.host || platName(c.platform)}</span></span>
         <span class="sm hide-m num">${c.events ? `${fmtN(c.events)} событий` : ''}</span>
-        <span class="status ${c.status}"><i></i>${{ ready: 'Готово', processing: 'Обработка', queued: 'В очереди', error: 'Ошибка' }[c.status] || c.status}</span>
+        <span class="status ${c.status}"><i></i>${{ ready: 'Готово', processing: 'Обработка', queued: 'В очереди', error: 'Ошибка', collecting: 'Сбор с хоста' }[c.status] || c.status}</span>
         <span class="sm hide-m">${c.t_min ? `${fmtTime(c.t_min, 'date')} — ${fmtTime(c.t_max, 'date')}` : ''}</span>
         <span class="sm">${fmtTime(c.created * 1000 + (-new Date().getTimezoneOffset() * 60000), 'short')}</span>
-      </a>`) : h`<div class="empty">Здесь появятся загруженные дела.</div>`}
+      </a>`) : h`<div class="empty">Здесь появятся загруженные и собранные с хостов журналы.</div>`}
     </div>
 
     <h2 class="section-h">Большие архивы</h2>
     <div class="panel" id="inbox"><div class="loading"><span class="spinner"></span></div></div>
   `);
 
-  // Выбор и удаление дел из списка
+  // Выбор и удаление сборов из списка
   if (list.length) {
     const sel = new Set();
     const del = $('#pick-del');
@@ -132,7 +133,7 @@ export async function renderHome(view, { platform, cases, meta, refresh }) {
       for (const id of sel) {
         try { await api.del(`/api/cases/${id}`); ok += 1; } catch (err) { errs.push(err.message); }
       }
-      toast(`Удалено дел: ${ok}${errs.length ? `; не удалось: ${errs.length} — ${errs[0]}` : ''}`);
+      toast(`Удалено сборов: ${ok}${errs.length ? `; не удалось: ${errs.length} — ${errs[0]}` : ''}`);
       await refresh();
     });
   }

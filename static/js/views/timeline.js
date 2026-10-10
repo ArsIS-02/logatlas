@@ -14,7 +14,7 @@ export async function renderTimeline(view, ctx) {
         <h2>Хронология хоста</h2>
         <div class="tools">
           <span class="sub" id="tl-span"></span>
-          <button class="btn small" type="button" id="tl-apply" disabled>Сделать периодом дела</button>
+          <button class="btn small" type="button" id="tl-apply" disabled>Сделать периодом сбора</button>
           <button class="btn ghost small" type="button" id="tl-reset" disabled>Исходный масштаб</button>
         </div>
       </div>

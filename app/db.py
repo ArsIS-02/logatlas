@@ -77,7 +77,7 @@ def init():
         c.executescript(CATALOG_SCHEMA)
         # дела, «зависшие» при перезапуске контейнера
         c.execute("UPDATE cases SET status='error', message='Обработка прервана перезапуском сервиса' "
-                  "WHERE status IN ('processing','queued')")
+                  "WHERE status IN ('processing','queued','collecting')")
 
 
 def case_path(case_id: str) -> str:

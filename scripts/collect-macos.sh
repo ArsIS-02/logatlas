@@ -1,32 +1,151 @@
 #!/bin/bash
-# Сбор журналов macOS для LogAtlas. Запуск: sudo bash collect-macos.sh [дней]
-# Результат: ~/Desktop/<host>-logs-<дата>.tar.gz
-set -euo pipefail
-DAYS="${1:-3}"
-HOST="$(scutil --get LocalHostName 2>/dev/null || hostname -s)"
-OUT_DIR="$(mktemp -d)"
-STAMP="$(date +%Y%m%d-%H%M)"
-DEST="${SUDO_USER:+/Users/$SUDO_USER}/Desktop"; DEST="${DEST:-$HOME/Desktop}"
-ARCHIVE="$DEST/${HOST}-logs-${STAMP}.tar.gz"
+# Сбор журналов macOS для LogAtlas.
+#
+#   sudo bash collect-macos.sh [дней]     архив ~/Desktop/<host>-logs-<дата>.tar.gz за N дней (по умолчанию 3)
+#
+# Режимы для веб-панели LogAtlas (сбор по SSH, см. «Хосты» в панели):
+#   --scan-json                                   найденные журналы в JSON (stdout)
+#   --stream --since @EPOCH --until @EPOCH --sources a,b   архив tar.gz в stdout, ход — строки LOGATLAS-PROGRESS в stderr
+#
+# Совместим с /bin/bash 3.2 из macOS.
+set -uo pipefail
 
-echo "Unified log за ${DAYS} дн. (без самых шумных подсистем)…"
+MODE=''; SINCE=''; UNTIL=''; SOURCES=''; DAYS=3
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --scan-json) MODE=scan ;;
+    --stream)    MODE=stream ;;
+    --since)     SINCE="${2:-}"; shift ;;
+    --until)     UNTIL="${2:-}"; shift ;;
+    --sources)   SOURCES="${2:-}"; shift ;;
+    [0-9]*)      DAYS="$1" ;;
+    -h|--help)   sed -n '2,10p' "$0"; exit 0 ;;
+    *) echo "Неизвестный параметр: $1" >&2; exit 1 ;;
+  esac
+  shift
+done
+[ "$(id -u)" -eq 0 ] || { echo "Нужны права root: sudo bash $0" >&2; exit 1; }
+if [ -n "$MODE" ]; then exec 3>&1 1>&2; fi
+progress() { [ -n "$MODE" ] && printf 'LOGATLAS-PROGRESS %s\n' "$*" >&2; return 0; }
+
+HOST="$(scutil --get LocalHostName 2>/dev/null || hostname -s)"
+TZNAME="$(readlink /etc/localtime 2>/dev/null | sed 's|.*/zoneinfo/||')"
+OFF="$(date +%z)"
+OFFMIN=$(( (10#${OFF:1:2} * 60 + 10#${OFF:3:2}) * (${OFF:0:1}1) ))
+
 # Фильтр убирает служебный шум (mDNSResponder, trustd, runningboard и т.п.) —
 # объём падает в разы, а события входа, sudo, USB, TCC, установок сохраняются.
-log show --last "${DAYS}d" --style ndjson --info \
-  --predicate 'NOT (process IN {"mDNSResponder","trustd","cfprefsd","gamepolicyd","mds","mds_stores","mdworker_shared","WeatherWidget","WallpaperAerialsExtension","MTLCompilerService"}) AND NOT (subsystem == "com.apple.runningboard" AND NOT (eventMessage CONTAINS "Now tracking process"))' \
-  > "$OUT_DIR/unified.ndjson" || true
+QUIET='NOT (process IN {"mDNSResponder","trustd","cfprefsd","gamepolicyd","mds","mds_stores","mdworker_shared","WeatherWidget","WallpaperAerialsExtension","MTLCompilerService"}) AND NOT (subsystem == "com.apple.runningboard" AND NOT (eventMessage CONTAINS "Now tracking process"))'
 
-echo "Журнал питания (pmset)…"
-pmset -g log > "$OUT_DIR/pmset.log" 2>/dev/null || true
+# id|название|по умолчанию|описание|файлы
+SRC_LIST='unified|Unified log|1|журнал macOS без самых шумных подсистем: входы, sudo, USB, TCC, установки|
+unified_full|Unified log полностью|0|весь журнал без фильтра шума (в разы больше)|
+pmset|Питание|1|сон, пробуждение, перезагрузки (pmset -g log)|
+install|Установки|1|install.log: пакеты и обновления|/var/log/install.log*
+system|system.log|0|классический syslog|/var/log/system.log*
+wifi|Wi-Fi|0|wifi.log|/var/log/wifi.log*
+launchd|launchd|0|журнал launchd|/var/log/com.apple.xpc.launchd/launchd.log*'
 
-echo "Файлы /var/log…"
-mkdir -p "$OUT_DIR/var_log"
-cd /var/log
-for f in system.log* install.log* wifi.log* fsck_apfs*.log keybagd.log* shutdown_monitor.log com.apple.xpc.launchd; do
-  [ -e "$f" ] && cp -R "$f" "$OUT_DIR/var_log/" 2>/dev/null || true
+files_of() {  # $1 — шаблоны через пробел
+  local g f
+  for g in $1; do for f in $g; do [ -f "$f" ] && [ -s "$f" ] && printf '%s\n' "$f"; done; done
+}
+jstr() { local v="${1//\\/\\\\}"; v="${v//\"/\\\"}"; printf '"%s"' "$v"; }
+lt() { date -r "$1" '+%Y-%m-%d %H:%M:%S'; }   # эпоха → местное время хоста
+
+# ------------------------------------------------------------------ найденные журналы
+scan_json() {
+  local first=1 id label def desc globs size a b list
+  local tv_min='' tv_max=''
+  if [ -d /var/db/diagnostics ]; then
+    tv_min=$(find /var/db/diagnostics -name '*.tracev3' -exec stat -f %m {} + 2>/dev/null | sort -n | head -1)
+    tv_max=$(date +%s)
+  fi
+  printf '{"os":"macos","host":%s,"tz_offset_min":%d,"tz_name":%s,"now":%d,"sources":[' \
+    "$(jstr "$HOST")" "$OFFMIN" "$(jstr "$TZNAME")" "$(date +%s)"
+  while IFS='|' read -r id label def desc globs; do
+    [ -n "$id" ] || continue
+    size=0; a=''; b=''
+    case "$id" in
+      unified|unified_full)
+        size=$(du -sk /var/db/diagnostics 2>/dev/null | cut -f1); size=$(( ${size:-0} * 1024 )); a="$tv_min"; b="$tv_max" ;;
+      pmset) size=0 ;;
+      *)
+        list="$(files_of "$globs")"
+        [ -n "$list" ] || continue
+        size=$(printf '%s\n' "$list" | tr '\n' '\0' | xargs -0 du -ck 2>/dev/null | tail -1 | cut -f1); size=$(( ${size:-0} * 1024 ))
+        a=$(printf '%s\n' "$list" | tr '\n' '\0' | xargs -0 stat -f %m 2>/dev/null | sort -n | head -1)
+        b=$(printf '%s\n' "$list" | tr '\n' '\0' | xargs -0 stat -f %m 2>/dev/null | sort -n | tail -1) ;;
+    esac
+    [ $first = 1 ] || printf ','; first=0
+    printf '{"id":%s,"label":%s,"desc":%s,"size":%d,"first":%s,"last":%s,"default":%s}' \
+      "$(jstr "$id")" "$(jstr "$label")" "$(jstr "$desc")" "$size" "${a:-null}" "${b:-null}" \
+      "$([ "$def" = 1 ] && echo true || echo false)"
+  done <<< "$SRC_LIST"
+  printf ']}\n'
+}
+
+# строки вида «2026-10-10 10:59:01…» (местное время) — отбор по первым 19 символам
+iso_filter() { awk -v s="$1" -v u="$2" '{ k = substr($0, 1, 19); if (k ~ /^[0-9]{4}-[0-9][0-9]-[0-9][0-9] [0-9:]{8}$/) keep = (k >= s && k <= u); if (keep) print }'; }
+
+collect_one() {  # $1 id, $2 каталог
+  local id="$1" dir="$2" s u globs f
+  s="$(lt "$SINCE")"; u="$(lt "$UNTIL")"
+  case "$id" in
+    unified)      log show --start "$s" --end "$u" --style ndjson --info --predicate "$QUIET" > "$dir/unified.ndjson" 2>/dev/null ;;
+    unified_full) log show --start "$s" --end "$u" --style ndjson --info > "$dir/unified-full.ndjson" 2>/dev/null ;;
+    pmset)        pmset -g log 2>/dev/null | iso_filter "$s" "$u" > "$dir/pmset.log" ;;
+    install)
+      for f in $(files_of "/var/log/install.log*"); do
+        case "$f" in *.gz) gzip -dc "$f" ;; *.bz2) bzip2 -dc "$f" ;; *) cat "$f" ;; esac
+      done | iso_filter "$s" "$u" > "$dir/install.log" ;;
+    *)
+      globs="$(printf '%s\n' "$SRC_LIST" | awk -F'|' -v id="$id" '$1 == id { print $5 }')"
+      # формат без года — берём целиком файлы, изменявшиеся за период
+      for f in $(files_of "$globs"); do
+        [ "$(stat -f %m "$f")" -ge "$SINCE" ] && cp -p "$f" "$dir/" 2>/dev/null
+      done ;;
+  esac
+  find "$dir" -type f -size 0 -delete 2>/dev/null
+}
+
+if [ "$MODE" = scan ]; then scan_json >&3; exit 0; fi
+
+if [ "$MODE" = stream ]; then
+  [[ "$SINCE" =~ ^@[0-9]{9,11}$ ]] && [[ "$UNTIL" =~ ^@[0-9]{9,11}$ ]] || { echo "Нужны --since @EPOCH и --until @EPOCH" >&2; exit 1; }
+  SINCE="${SINCE#@}"; UNTIL="${UNTIL#@}"
+  [ "$UNTIL" -gt "$SINCE" ] || { echo "Конец периода раньше начала" >&2; exit 1; }
+  [ -n "$SOURCES" ] || SOURCES="$(printf '%s\n' "$SRC_LIST" | awk -F'|' '$3 == 1 { printf "%s,", $1 }')"
+else
+  UNTIL=$(date +%s); SINCE=$((UNTIL - DAYS * 86400))
+  SOURCES="$(printf '%s\n' "$SRC_LIST" | awk -F'|' '$3 == 1 { printf "%s,", $1 }')"
+fi
+
+WORK="$(mktemp -d /tmp/logatlas.XXXXXX)"
+trap 'rm -rf "$WORK"' EXIT
+IDS=$(printf '%s' "$SOURCES" | tr ',' ' ')
+n=0; for id in $IDS; do n=$((n + 1)); done
+i=0; got=0
+for id in $IDS; do
+  printf '%s\n' "$SRC_LIST" | awk -F'|' -v id="$id" '$1 == id { f = 1 } END { exit !f }' || { echo "Неизвестный журнал: $id" >&2; continue; }
+  i=$((i + 1))
+  label="$(printf '%s\n' "$SRC_LIST" | awk -F'|' -v id="$id" '$1 == id { print $2 }')"
+  progress "$i" "$n" "$label"
+  echo "  [$i/$n] $label…" >&2
+  mkdir -p "$WORK/$id"
+  collect_one "$id" "$WORK/$id"
+  if [ -n "$(ls -A "$WORK/$id")" ]; then got=$((got + 1)); else rmdir "$WORK/$id"; echo "        нет записей за период" >&2; fi
 done
+[ $got -gt 0 ] || { echo "За выбранный период записей нет." >&2; exit 12; }
 
-tar -czf "$ARCHIVE" -C "$OUT_DIR" .
+if [ "$MODE" = stream ]; then
+  progress pack
+  tar -czf - -C "$WORK" . >&3
+  exit 0
+fi
+
+DEST="${SUDO_USER:+/Users/$SUDO_USER}/Desktop"; DEST="${DEST:-$HOME/Desktop}"
+ARCHIVE="$DEST/${HOST}-logs-$(date +%Y%m%d-%H%M).tar.gz"
+tar -czf "$ARCHIVE" -C "$WORK" .
 [ -n "${SUDO_USER:-}" ] && chown "$SUDO_USER" "$ARCHIVE"
-rm -rf "$OUT_DIR"
 echo "Готово: $ARCHIVE ($(du -h "$ARCHIVE" | cut -f1))"

@@ -2,12 +2,21 @@
 # Собирается под архитектуру хоста (на Raspberry Pi — linux/arm64).
 FROM python:3.12-slim
 
+# UID/GID, от имени которых работает контейнер (см. docker-compose.yml): ssh требует запись в /etc/passwd
+ARG LOGATLAS_UID=1000
+ARG LOGATLAS_GID=1000
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     LOGATLAS_DATA=/data \
     LOGATLAS_INBOX=/data/inbox \
     TMPDIR=/data/tmp
+
+# openssh-client — сбор журналов с хостов по SSH из панели
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends openssh-client \
+ && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 COPY requirements.txt .
@@ -18,8 +27,12 @@ RUN pip install --no-cache-dir -r requirements.txt \
 
 COPY app ./app
 COPY static ./static
+COPY scripts ./scripts
+RUN chmod -R a+rX /app
 
-RUN mkdir -p /data/inbox /data/tmp && chmod -R 0777 /data
+RUN (getent group "$LOGATLAS_GID" >/dev/null || groupadd -g "$LOGATLAS_GID" logatlas) \
+ && (getent passwd "$LOGATLAS_UID" >/dev/null || useradd -u "$LOGATLAS_UID" -g "$LOGATLAS_GID" -d /data -M -s /usr/sbin/nologin logatlas) \
+ && mkdir -p /data/inbox /data/tmp && chmod -R 0777 /data
 VOLUME ["/data"]
 EXPOSE 8484
 

@@ -1,4 +1,4 @@
-// Источники: покрытие по времени, список файлов, дозагрузка, настройки дела
+// Источники: покрытие по времени, список файлов, дозагрузка, настройки сбора
 import { api } from '../api.js';
 import { gantt } from '../charts.js';
 import { $, cssVar, fmtBytes, fmtN, fmtTime, h, mount, toast } from '../util.js';
@@ -43,21 +43,21 @@ export async function renderSources(view, ctx) {
           <td>${f.status === 'ok' ? h`<span class="status ready"><i></i>разобран</span>` : h`<span class="status ${f.status === 'error' ? 'error' : ''}"><i></i>${f.status === 'skipped' ? 'пропущен' : f.status}</span>${f.error ? h`<div class="muted" style="font-size:12px">${f.error}</div>` : ''}`}</td>
         </tr>`)}
       </tbody></table></div>
-      ${skipped.length ? h`<p class="muted" style="font-size:12.5px">Пропущенные файлы — двоичные или неизвестного формата. Если это журнал, выгрузите его в текст (например, <span class="mono">log show --style ndjson</span> для .logarchive) и добавьте в дело.</p>` : ''}
+      ${skipped.length ? h`<p class="muted" style="font-size:12.5px">Пропущенные файлы — двоичные или неизвестного формата. Если это журнал, выгрузите его в текст (например, <span class="mono">log show --style ndjson</span> для .logarchive) и добавьте в сбор.</p>` : ''}
     </section>
     <div class="grid g-2" style="margin-top:18px">
       <section class="panel">
-        <div class="panel-h"><h2>Добавить файлы в дело</h2></div>
+        <div class="panel-h"><h2>Добавить файлы в сбор</h2></div>
         <p class="ink2" style="font-size:13px;margin:0 0 12px">Новые события встанут в ту же хронологию, правила пересчитаются.</p>
         <div class="btn-row"><label class="btn" for="add-files">Выбрать файлы</label><input id="add-files" type="file" multiple class="hidden"><span class="muted" id="add-st" style="font-size:12.5px"></span></div>
       </section>
       <section class="panel">
-        <div class="panel-h"><h2>Дело</h2></div>
+        <div class="panel-h"><h2>Сбор</h2></div>
         <label class="lbl">Название<input class="field" id="c-name" value="${c.name}"></label>
         <label class="lbl" style="margin-top:10px">Заметки<textarea class="field" id="c-notes" rows="3" style="font-family:var(--font);font-size:13px">${c.notes || ''}</textarea></label>
         <div class="btn-row" style="margin-top:12px">
           <button class="btn" type="button" id="c-save">Сохранить</button>
-          <button class="btn danger" type="button" id="c-del">Удалить дело</button>
+          <button class="btn danger" type="button" id="c-del">Удалить сбор</button>
         </div>
         <p class="muted" style="font-size:12px;margin:10px 0 0">Часовой пояс хоста: ${c.tz_label}${c.tz_mode === 'auto' ? ', определён по журналам' : ''}.</p>
       </section>
@@ -88,14 +88,14 @@ export async function renderSources(view, ctx) {
     if (b.dataset.armed !== '1') {
       b.dataset.armed = '1';
       b.textContent = 'Удалить безвозвратно';
-      setTimeout(() => { b.dataset.armed = ''; b.textContent = 'Удалить дело'; }, 4000);
+      setTimeout(() => { b.dataset.armed = ''; b.textContent = 'Удалить сбор'; }, 4000);
       return;
     }
     try {
       await api.del(`/api/cases/${c.id}`);
       await app.loadCases();
       window.location.hash = '#/';
-      toast('Дело удалено');
+      toast('Сбор удалён');
     } catch (err) { toast(err.message); }
   });
 }

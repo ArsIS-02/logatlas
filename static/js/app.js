@@ -2,7 +2,7 @@
 import { api } from './api.js';
 import { ribbon } from './charts.js';
 import {
-  $, $$, CAT_KEYS, PLATFORMS, fmtN, fmtSpan, fmtTime, h, mount, platIcon, platName, raw, toast,
+  $, $$, CAT_KEYS, PLATFORMS, fmtN, fmtSpan, fmtTime, h, mount, platIcon, platName, plural, raw, toast,
 } from './util.js';
 import { renderHome } from './views/home.js';
 import { renderOverview } from './views/overview.js';
@@ -13,6 +13,7 @@ import { renderEntities } from './views/entities.js';
 import { renderSources } from './views/sources.js';
 import { renderReport } from './views/report.js';
 import { renderProgress } from './views/progress.js';
+import { renderHosts, renderCollect } from './views/hosts.js';
 import { openEvent, closeDrawer } from './views/event.js';
 
 const TABS = [
@@ -30,7 +31,7 @@ const S = {
   cases: [],
   route: { kind: 'home', platform: 'all' },
   case: null,
-  full: null,         // обзор дела без фильтра (для ленты времени)
+  full: null,         // обзор сбора без фильтра (для ленты времени)
   ribbonApi: null,
   poll: null,
   renderSeq: 0,
@@ -50,6 +51,8 @@ function parseHash() {
     };
   }
   if (parts[0] === 'p' && parts[1]) return { kind: 'home', platform: parts[1] };
+  if (parts[0] === 'hosts') return { kind: 'hosts' };
+  if (parts[0] === 'collect' && parts[1]) return { kind: 'collect', hostId: parts[1] };
   return { kind: 'home', platform: 'all' };
 }
 
@@ -96,28 +99,32 @@ async function loadCases() {
 function renderSide() {
   const counts = { all: S.cases.length, macos: 0, windows: 0, linux: 0 };
   S.cases.forEach((c) => { if (counts[c.platform] !== undefined) counts[c.platform] += 1; });
-  const activePlat = S.route.kind === 'home' ? S.route.platform : (S.case?.platform || 'all');
+  const kind = S.route.kind;
+  const activePlat = kind === 'home' ? S.route.platform : kind === 'case' ? (S.case?.platform || 'all') : null;
   mount($('#platforms'), h`${Object.entries(PLATFORMS).map(([k, p]) => h`
-    <a class="plat ${activePlat === k ? 'on' : ''}" href="#/p/${k}">${raw(platIcon(k))}<span>${p.name}</span><span class="cnt">${counts[k] || ''}</span></a>`)}`);
-  const list = S.cases.filter((c) => activePlat === 'all' || c.platform === activePlat || ['mixed', 'other', null].includes(c.platform));
+    <a class="plat ${activePlat === k ? 'on' : ''}" href="#/p/${k}">${raw(platIcon(k))}<span>${p.name}</span><span class="cnt">${counts[k] || ''}</span></a>`)}
+    <a class="plat plat-hosts ${kind === 'hosts' || kind === 'collect' ? 'on' : ''}" href="#/hosts">${raw(HOSTS_ICON)}<span>Хосты и сбор</span></a>`);
+  const listPlat = activePlat || 'all';
+  const list = S.cases.filter((c) => listPlat === 'all' || c.platform === listPlat || ['mixed', 'other', null].includes(c.platform));
   mount($('#side-cases'), h`
-    <div class="side-h"><span>Дела</span><a href="#/p/${activePlat}" title="Загрузить журналы">+ Загрузить</a></div>
+    <div class="side-h"><span>Сборы</span><a href="#/p/${listPlat}" title="Загрузить журналы">+ Загрузить</a></div>
     ${list.length ? list.map((c) => h`<div class="side-case"><a class="case-link ${S.route.id === c.id ? 'on' : ''}" href="#/c/${c.id}/overview" title="${c.name}">
-      ${c.name}<small>${c.host || platName(c.platform)}${c.status !== 'ready' ? ` — ${statusName(c.status)}` : ''}</small></a><button class="case-del" type="button" data-id="${c.id}" title="Удалить дело" aria-label="${`Удалить дело «${c.name}»`}">${raw(TRASH)}<span></span></button></div>`)
+      ${c.name}<small>${c.host || platName(c.platform)}${c.status !== 'ready' ? ` — ${statusName(c.status)}` : ''}</small></a><button class="case-del" type="button" data-id="${c.id}" title="Удалить сбор" aria-label="${`Удалить сбор «${c.name}»`}">${raw(TRASH)}<span></span></button></div>`)
     : h`<div class="muted" style="padding:6px 10px;font-size:12.5px">Пока пусто</div>`}`);
 }
 
+const HOSTS_ICON = '<svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3.5" width="14" height="5" rx="1.3"/><rect x="3" y="11.5" width="14" height="5" rx="1.3"/><path d="M6 6h.01M6 14h.01" stroke-width="2.2" stroke-linecap="round"/></svg>';
 const TRASH = '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 4h11M6.5 4V2.5h3V4M4 4l.7 9.5h6.6L12 4M6.8 6.5v4.5M9.2 6.5v4.5"/></svg>';
 
 function disarm(b) {
   clearTimeout(b._t);
   b.dataset.armed = '';
   b.classList.remove('armed');
-  b.title = 'Удалить дело';
+  b.title = 'Удалить сбор';
   b.querySelector('span').textContent = '';
 }
 
-// Удаление дела из боковой панели: первый щелчок — «Удалить?», второй в течение 4 с — удаление
+// Удаление сбора из боковой панели: первый щелчок — «Удалить?», второй в течение 4 с — удаление
 async function onSideClick(e) {
   const b = e.target.closest('.case-del');
   if (!b) return;
@@ -127,7 +134,7 @@ async function onSideClick(e) {
     $$('#side-cases .case-del.armed').forEach(disarm);
     b.dataset.armed = '1';
     b.classList.add('armed');
-    b.title = 'Нажмите ещё раз: дело и загруженные в него файлы удалятся безвозвратно';
+    b.title = 'Нажмите ещё раз: сбор и его файлы удалятся безвозвратно';
     b.querySelector('span').textContent = 'Удалить?';
     b._t = setTimeout(() => disarm(b), 4000);
     return;
@@ -140,7 +147,7 @@ async function onSideClick(e) {
     await api.del(`/api/cases/${id}`);
     if (wasOpen) { S.case = null; S.full = null; }
     await loadCases();
-    toast('Дело удалено');
+    toast('Сбор удалён');
     if (wasOpen) window.location.hash = `#/p/${S.route.platform || 'all'}`;
     else if (S.route.kind === 'home') route();
   } catch (err) {
@@ -151,7 +158,7 @@ async function onSideClick(e) {
 }
 
 export function statusName(s) {
-  return { ready: 'готово', processing: 'обработка', queued: 'в очереди', error: 'ошибка' }[s] || s;
+  return { ready: 'готово', processing: 'обработка', queued: 'в очереди', error: 'ошибка', collecting: 'сбор с хоста' }[s] || s;
 }
 
 // ---------------------------------------------------------------------------
@@ -168,9 +175,15 @@ async function loadCase(id, force = false) {
 function renderTop() {
   const top = $('#top');
   const r = S.route;
+  if (r.kind === 'hosts' || r.kind === 'collect') {
+    mount(top, h`<div class="top-row"><div class="top-title"><h1>${r.kind === 'hosts' ? 'Хосты и сбор журналов' : 'Новый сбор с хоста'}</h1>
+      <div class="chips"><span class="chip">по SSH, ключом панели</span></div></div></div>`);
+    S.ribbonApi = null;
+    return;
+  }
   if (r.kind !== 'case' || !S.case) {
     mount(top, h`<div class="top-row"><div class="top-title"><h1>${r.platform && r.platform !== 'all' ? `Журналы ${PLATFORMS[r.platform]?.name || ''}` : 'Анализ журналов'}</h1>
-      <div class="chips"><span class="chip">${S.cases.length} ${S.cases.length === 1 ? 'дело' : 'дел'}</span></div></div></div>`);
+      <div class="chips"><span class="chip">${S.cases.length} ${plural(S.cases.length, 'сбор', 'сбора', 'сборов')}</span></div></div></div>`);
     S.ribbonApi = null;
     return;
   }
@@ -215,7 +228,7 @@ function renderRibbonInfo() {
   const r = S.route.range;
   mount(el, r ? h`<span>Период</span><span class="rng">${fmtTime(r[0])} — ${fmtTime(r[1])}</span><span class="muted">${fmtSpan(r[1] - r[0])}</span>
       <button class="btn ghost small" id="rng-reset" type="button">Сбросить период</button>`
-    : h`<span class="muted">Весь период дела. Выделите участок на ленте, чтобы сузить все вкладки.</span>
+    : h`<span class="muted">Весь период сбора. Выделите участок на ленте, чтобы сузить все вкладки.</span>
       <span class="legend-inline"><i class="li-a"></i>все события <i class="li-c"></i>классифицированные</span>`);
   const b = $('#rng-reset');
   if (b) b.addEventListener('click', () => ctx().setRange(null));
@@ -280,12 +293,21 @@ async function route() {
     await renderHome(view, { platform: r.platform, cases: S.cases, meta: S.meta, reload: loadCases, refresh: async () => { await loadCases(); route(); } });
     return;
   }
+  if (r.kind === 'hosts' || r.kind === 'collect') {
+    S.case = null;
+    S.full = null;
+    renderSide();
+    renderTop();
+    if (r.kind === 'hosts') await renderHosts(view);
+    else await renderCollect(view, { id: r.hostId });
+    return;
+  }
   const caseChanged = !prev || prev.id !== r.id;
   if (caseChanged) mount(view, h`<div class="loading"><span class="spinner"></span></div>`);
   try {
     await loadCase(r.id, caseChanged);
   } catch (e) {
-    mount(view, h`<div class="note err">Не удалось открыть дело: ${e.message}</div><a href="#/">К списку дел</a>`);
+    mount(view, h`<div class="note err">Не удалось открыть сбор: ${e.message}</div><a href="#/">К списку сборов</a>`);
     return;
   }
   if (seq !== S.renderSeq) return;
@@ -347,6 +369,7 @@ function theme() {
 async function boot() {
   $('#theme-btn').addEventListener('click', theme);
   $('#side-cases').addEventListener('click', onSideClick);
+  window.addEventListener('la:cases-changed', () => loadCases());
   try {
     S.meta = await api.get('/api/meta');
     $('#ver').textContent = `v${S.meta.version}`;

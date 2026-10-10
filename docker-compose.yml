@@ -1,7 +1,11 @@
 services:
   logatlas:
-    build: .
-    image: logatlas:1.0
+    build:
+      context: .
+      args:
+        LOGATLAS_UID: ${LOGATLAS_UID:-1000}
+        LOGATLAS_GID: ${LOGATLAS_GID:-1000}
+    image: logatlas:1.1
     container_name: logatlas
     restart: unless-stopped
     # процесс работает от имени вашего пользователя, чтобы файлы в ./data принадлежали вам
