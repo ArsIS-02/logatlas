@@ -36,7 +36,7 @@ function tzOptions() {
   return opts.join('');
 }
 
-export async function renderHome(view, { platform, cases, meta }) {
+export async function renderHome(view, { platform, cases, meta, refresh }) {
   const list = cases.filter((c) => platform === 'all' || c.platform === platform);
   const plats = platform === 'all' ? ['macos', 'windows', 'linux'] : [platform];
   const sup = meta?.supported || {};
@@ -69,10 +69,16 @@ export async function renderHome(view, { platform, cases, meta }) {
     </div>
 
     <h2 class="section-h">${platform === 'all' ? 'Все дела' : `Дела: ${platName(platform)}`}</h2>
-    <div class="case-rows">
-      ${list.length ? list.map((c) => h`<a class="case-row" href="#/c/${c.id}/overview">
+    ${list.length ? h`<div class="case-tools">
+      <label class="pick-all"><input type="checkbox" id="pick-all"> Выбрать все</label>
+      <span class="muted" id="pick-n"></span>
+      <button class="btn danger" id="pick-del" type="button" disabled>Удалить выбранные</button>
+    </div>` : ''}
+    <div class="case-rows" id="case-rows">
+      ${list.length ? list.map((c) => h`<a class="case-row" href="#/c/${c.id}/overview" data-id="${c.id}">
+        <input type="checkbox" class="pick" data-id="${c.id}" aria-label="${`Выбрать дело «${c.name}»`}">
         <span class="ink2">${raw(platIcon(c.platform))}</span>
-        <span><span class="nm">${c.name}</span><br><span class="sm">${c.host || platName(c.platform)}</span></span>
+        <span title="${c.name}"><span class="nm">${c.name}</span><span class="sm">${c.host || platName(c.platform)}</span></span>
         <span class="sm hide-m num">${c.events ? `${fmtN(c.events)} событий` : ''}</span>
         <span class="status ${c.status}"><i></i>${{ ready: 'Готово', processing: 'Обработка', queued: 'В очереди', error: 'Ошибка' }[c.status] || c.status}</span>
         <span class="sm hide-m">${c.t_min ? `${fmtTime(c.t_min, 'date')} — ${fmtTime(c.t_max, 'date')}` : ''}</span>
@@ -83,6 +89,53 @@ export async function renderHome(view, { platform, cases, meta }) {
     <h2 class="section-h">Большие архивы</h2>
     <div class="panel" id="inbox"><div class="loading"><span class="spinner"></span></div></div>
   `);
+
+  // Выбор и удаление дел из списка
+  if (list.length) {
+    const sel = new Set();
+    const del = $('#pick-del');
+    const disarm = () => { clearTimeout(del._t); del.dataset.armed = ''; del.textContent = 'Удалить выбранные'; };
+    const update = () => {
+      const n = sel.size;
+      $('#pick-n').textContent = n ? `выбрано: ${n}` : '';
+      del.disabled = !n;
+      disarm();
+      const all = $('#pick-all');
+      all.checked = n > 0 && n === list.length;
+      all.indeterminate = n > 0 && n < list.length;
+      $$('#case-rows .case-row').forEach((r) => r.classList.toggle('picked', sel.has(r.dataset.id)));
+    };
+    $('#case-rows').addEventListener('click', (e) => {
+      const cb = e.target.closest('input.pick');
+      if (!cb) return;
+      e.stopPropagation();
+      if (cb.checked) sel.add(cb.dataset.id); else sel.delete(cb.dataset.id);
+      update();
+    });
+    $('#pick-all').addEventListener('change', (e) => {
+      sel.clear();
+      $$('#case-rows input.pick').forEach((cb) => { cb.checked = e.target.checked; if (cb.checked) sel.add(cb.dataset.id); });
+      update();
+    });
+    del.addEventListener('click', async () => {
+      if (del.dataset.armed !== '1') {
+        del.dataset.armed = '1';
+        del.textContent = `Удалить безвозвратно: ${sel.size}`;
+        del._t = setTimeout(disarm, 4000);
+        return;
+      }
+      clearTimeout(del._t);
+      del.disabled = true;
+      del.textContent = 'Удаление…';
+      let ok = 0;
+      const errs = [];
+      for (const id of sel) {
+        try { await api.del(`/api/cases/${id}`); ok += 1; } catch (err) { errs.push(err.message); }
+      }
+      toast(`Удалено дел: ${ok}${errs.length ? `; не удалось: ${errs.length} — ${errs[0]}` : ''}`);
+      await refresh();
+    });
+  }
 
   let picked = [];
   const pickedEl = $('#picked');

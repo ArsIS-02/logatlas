@@ -197,7 +197,10 @@ def worker():
 def run_ingest(case_id, paths, tz_default, tz_mode):
     t_start = time.time()
     case = db.get_case(case_id)
-    first_load = not case or not case.get("events")
+    if not case:
+        log.info("case %s was deleted before processing", case_id)
+        return
+    first_load = not case.get("events")
     if not first_load:
         tz_default = case["tz"]
         tz_mode = "fixed"

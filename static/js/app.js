@@ -102,9 +102,52 @@ function renderSide() {
   const list = S.cases.filter((c) => activePlat === 'all' || c.platform === activePlat || ['mixed', 'other', null].includes(c.platform));
   mount($('#side-cases'), h`
     <div class="side-h"><span>Дела</span><a href="#/p/${activePlat}" title="Загрузить журналы">+ Загрузить</a></div>
-    ${list.length ? list.map((c) => h`<a class="case-link ${S.route.id === c.id ? 'on' : ''}" href="#/c/${c.id}/overview" title="${c.name}">
-      ${c.name}<small>${c.host || platName(c.platform)}${c.status !== 'ready' ? ` — ${statusName(c.status)}` : ''}</small></a>`)
+    ${list.length ? list.map((c) => h`<div class="side-case"><a class="case-link ${S.route.id === c.id ? 'on' : ''}" href="#/c/${c.id}/overview" title="${c.name}">
+      ${c.name}<small>${c.host || platName(c.platform)}${c.status !== 'ready' ? ` — ${statusName(c.status)}` : ''}</small></a><button class="case-del" type="button" data-id="${c.id}" title="Удалить дело" aria-label="${`Удалить дело «${c.name}»`}">${raw(TRASH)}<span></span></button></div>`)
     : h`<div class="muted" style="padding:6px 10px;font-size:12.5px">Пока пусто</div>`}`);
+}
+
+const TRASH = '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 4h11M6.5 4V2.5h3V4M4 4l.7 9.5h6.6L12 4M6.8 6.5v4.5M9.2 6.5v4.5"/></svg>';
+
+function disarm(b) {
+  clearTimeout(b._t);
+  b.dataset.armed = '';
+  b.classList.remove('armed');
+  b.title = 'Удалить дело';
+  b.querySelector('span').textContent = '';
+}
+
+// Удаление дела из боковой панели: первый щелчок — «Удалить?», второй в течение 4 с — удаление
+async function onSideClick(e) {
+  const b = e.target.closest('.case-del');
+  if (!b) return;
+  e.preventDefault();
+  e.stopPropagation();
+  if (b.dataset.armed !== '1') {
+    $$('#side-cases .case-del.armed').forEach(disarm);
+    b.dataset.armed = '1';
+    b.classList.add('armed');
+    b.title = 'Нажмите ещё раз: дело и загруженные в него файлы удалятся безвозвратно';
+    b.querySelector('span').textContent = 'Удалить?';
+    b._t = setTimeout(() => disarm(b), 4000);
+    return;
+  }
+  clearTimeout(b._t);
+  b.disabled = true;
+  const id = b.dataset.id;
+  const wasOpen = S.route.kind === 'case' && S.route.id === id;
+  try {
+    await api.del(`/api/cases/${id}`);
+    if (wasOpen) { S.case = null; S.full = null; }
+    await loadCases();
+    toast('Дело удалено');
+    if (wasOpen) window.location.hash = `#/p/${S.route.platform || 'all'}`;
+    else if (S.route.kind === 'home') route();
+  } catch (err) {
+    toast(err.message);
+    b.disabled = false;
+    disarm(b);
+  }
 }
 
 export function statusName(s) {
@@ -234,7 +277,7 @@ async function route() {
     S.full = null;
     renderSide();
     renderTop();
-    await renderHome(view, { platform: r.platform, cases: S.cases, meta: S.meta, reload: loadCases });
+    await renderHome(view, { platform: r.platform, cases: S.cases, meta: S.meta, reload: loadCases, refresh: async () => { await loadCases(); route(); } });
     return;
   }
   const caseChanged = !prev || prev.id !== r.id;
@@ -303,6 +346,7 @@ function theme() {
 
 async function boot() {
   $('#theme-btn').addEventListener('click', theme);
+  $('#side-cases').addEventListener('click', onSideClick);
   try {
     S.meta = await api.get('/api/meta');
     $('#ver').textContent = `v${S.meta.version}`;
