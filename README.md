@@ -69,14 +69,36 @@
 
 ## Быстрый старт
 
+### Готовый образ
+
+Образы для `linux/amd64` (обычные ПК и серверы) и `linux/arm64` (Raspberry Pi, серверы на ARM) публикуются в GitHub Container Registry при каждом релизе. Docker сам скачает образ под архитектуру хоста, собирать ничего не нужно.
+
 ```bash
-git clone https://github.com/ArsIS-02/logatlas.git
-cd logatlas
+mkdir -p logatlas/data/inbox && cd logatlas
+docker run -d --name logatlas --restart unless-stopped \
+  -p 8484:8484 -v "$PWD/data:/data:Z" --user "$(id -u):$(id -g)" \
+  ghcr.io/arsis-02/logatlas:latest
+```
+
+Откройте `http://<адрес-сервера>:8484`. Конкретная версия — тег вместо `latest` (например, `ghcr.io/arsis-02/logatlas:1.3.0`); обновление — `docker pull` и пересоздание контейнера. Для хостов без доступа к интернету к каждому [релизу](https://github.com/ArsIS-02/logatlas/releases) приложены архивы образов: `docker load -i logatlas-<версия>-linux-amd64.tar.gz`.
+
+То же через Docker Compose — из клона репозитория:
+
+```bash
+git clone https://github.com/ArsIS-02/logatlas.git && cd logatlas
 mkdir -p data/inbox            # до первого запуска, чтобы папка принадлежала вам
+docker compose pull && docker compose up -d
+```
+
+### Сборка из исходников
+
+```bash
+git clone https://github.com/ArsIS-02/logatlas.git && cd logatlas
+mkdir -p data/inbox
 docker compose up -d --build
 ```
 
-Откройте `http://<адрес-сервера>:8484`. Первая сборка занимает несколько минут: скачивается `python:3.12-slim` под архитектуру хоста (arm64 или amd64).
+Первая сборка занимает несколько минут: скачивается `python:3.12-slim` под архитектуру хоста (arm64 или amd64).
 
 ### Попробовать без своих журналов
 
@@ -90,7 +112,7 @@ docker compose up -d --build
 sudo firewall-cmd --add-port=8484/tcp --permanent && sudo firewall-cmd --reload
 ```
 
-Если ваш UID не 1000, запускайте так: `LOGATLAS_UID=$(id -u) LOGATLAS_GID=$(id -g) docker compose up -d --build`. Порт меняется переменной `LOGATLAS_PORT`.
+Если ваш UID не 1000, задайте его в `.env` рядом с `docker-compose.yml`: `printf 'LOGATLAS_UID=%s\nLOGATLAS_GID=%s\n' "$(id -u)" "$(id -g)" > .env` — файлы в `./data` будут принадлежать вам. Порт меняется переменной `LOGATLAS_PORT`.
 
 ## Как собрать журналы
 

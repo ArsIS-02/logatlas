@@ -1,3 +1,5 @@
+# Готовый образ: docker compose pull && docker compose up -d
+# Сборка из исходников:   docker compose up -d --build
 services:
   logatlas:
     build:
@@ -5,7 +7,7 @@ services:
       args:
         LOGATLAS_UID: ${LOGATLAS_UID:-1000}
         LOGATLAS_GID: ${LOGATLAS_GID:-1000}
-    image: logatlas:1.2
+    image: ghcr.io/arsis-02/logatlas:${LOGATLAS_TAG:-latest}
     container_name: logatlas
     restart: unless-stopped
     # процесс работает от имени вашего пользователя, чтобы файлы в ./data принадлежали вам

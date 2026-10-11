@@ -1,0 +1,107 @@
+# Релиз: при отправке тега vX.Y.Z собирает образ под linux/amd64 и linux/arm64,
+# проверяет его, публикует в GitHub Container Registry и создаёт релиз с архивами образов
+# (для хостов без доступа к реестру: docker load -i …).
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  IMAGE: ghcr.io/arsis-02/logatlas
+  NAME: logatlas
+  PORT: "8484"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+
+      - name: Сборка linux/amd64 для проверки
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: ${{ env.NAME }}:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Проверка образа
+        run: |
+          set -e
+          # запуск от «чужого» UID, как с user: в docker-compose.yml
+          docker run --rm --user 4321:4321 "$NAME:test" ssh -G example.test | grep -x "user $NAME"
+          docker run -d --name t --user 4321:4321 -p "$PORT:$PORT" "$NAME:test"
+          for i in $(seq 1 40); do curl -fs "http://127.0.0.1:$PORT/healthz" && break; sleep 1; done
+          curl -fs "http://127.0.0.1:$PORT/healthz"
+          curl -fs -o /dev/null "http://127.0.0.1:$PORT/favicon.ico"
+          docker logs t | tail -n 20
+          docker rm -f t
+
+      - name: Сборка и публикация (amd64 + arm64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Архивы образов
+        run: |
+          set -e
+          V="${GITHUB_REF_NAME#v}"
+          for a in amd64 arm64; do
+            docker pull --platform "linux/$a" "$IMAGE:$V"
+            test "$(docker image inspect "$IMAGE:$V" --format '{{.Architecture}}')" = "$a"
+            docker save "$IMAGE:$V" | gzip > "$NAME-$V-linux-$a.tar.gz"
+            docker rmi "$IMAGE:$V"
+          done
+          ls -lh "$NAME"-*.tar.gz
+
+      - name: Релиз
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          V="${GITHUB_REF_NAME#v}"
+          cat > notes.md <<EOF
+          ## Готовый образ (linux/amd64 и linux/arm64)
+
+          \`\`\`bash
+          docker pull $IMAGE:$V
+          \`\`\`
+
+          Запуск — в разделе «Быстрый старт» README. Docker сам выберет образ под архитектуру хоста.
+
+          Без доступа к реестру: скачайте архив под свою архитектуру ниже и выполните
+          \`docker load -i $NAME-$V-linux-amd64.tar.gz\` (или \`…-arm64.tar.gz\`).
+          EOF
+          gh release create "$GITHUB_REF_NAME" --title "LogAtlas $V" --notes-file notes.md --generate-notes \
+            "$NAME-$V-linux-amd64.tar.gz" "$NAME-$V-linux-arm64.tar.gz"
