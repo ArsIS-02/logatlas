@@ -51,6 +51,7 @@ export async function renderHome(view, { platform, cases, meta, refresh }) {
           <input id="files" type="file" multiple class="hidden">
           <label class="btn" for="folder">Выбрать папку</label>
           <a class="btn" href="#/hosts">Собрать с хоста…</a>
+          ${meta?.local_collect ? h`<button class="btn" type="button" id="local-collect" title="Выгрузить журналы событий этого компьютера и сразу разобрать их (нужны права администратора)">Этот компьютер${meta.host ? ` (${meta.host})` : ''}…</button>` : ''}
           <input id="folder" type="file" webkitdirectory multiple class="hidden">
           <label class="lbl">Название сбора<input class="field" id="cname" placeholder="например, mbp-design-07, 9 октября" style="width:260px"></label>
           <label class="lbl">Часовой пояс хоста
@@ -186,6 +187,36 @@ export async function renderHome(view, { platform, cases, meta, refresh }) {
       btn.disabled = false;
       toast(e.message);
     }
+  }
+
+  // Журналы этого компьютера (LogAtlas для Windows)
+  const lc = $('#local-collect');
+  if (lc) {
+    lc.addEventListener('click', async () => {
+      lc.disabled = true;
+      let job;
+      try {
+        job = await api.post('/api/local/collect', {});
+      } catch (e) {
+        lc.disabled = false;
+        toast(e.message);
+        return;
+      }
+      toast('Открыто окно сборщика: выберите период и нажмите «Собрать». Архив разберётся сам.');
+      const timer = setInterval(async () => {
+        let j;
+        try { j = await api.get(`/api/local/collect/${job.id}`); } catch (e) { return; }
+        if (j.state === 'done') {
+          clearInterval(timer);
+          window.dispatchEvent(new Event('la:cases-changed'));
+          window.location.hash = `#/c/${j.case}/overview`;
+        } else if (j.state === 'closed' || j.state === 'error') {
+          clearInterval(timer);
+          if (document.body.contains(lc)) lc.disabled = false;
+          toast(j.error || 'Сбор не выполнен');
+        }
+      }, 2000);
+    });
   }
 
   // inbox

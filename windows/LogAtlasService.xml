@@ -1,0 +1,24 @@
+<!-- Служба LogAtlas для WinSW 2 (LogAtlasService.exe в этой же папке — переименованный WinSW-x64.exe).
+     Устанавливает и удаляет её service.ps1 (или install-service.cmd / uninstall-service.cmd). -->
+<service>
+  <id>LogAtlas</id>
+  <name>LogAtlas</name>
+  <description>LogAtlas — анализатор журналов macOS, Windows и Linux. Веб-интерфейс: http://этот-компьютер:8484 (порт — в %ProgramData%\LogAtlas\settings.json).</description>
+  <executable>%BASE%\..\python\python.exe</executable>
+  <arguments>"%BASE%\..\launcher.pyw" --service</arguments>
+  <workingdirectory>%BASE%\..</workingdirectory>
+  <env name="PYTHONUTF8" value="1"/>
+  <env name="PYTHONDONTWRITEBYTECODE" value="1"/>
+  <startmode>Automatic</startmode>
+  <delayedAutoStart>true</delayedAutoStart>
+  <stoptimeout>20 sec</stoptimeout>
+  <logpath>%ProgramData%\LogAtlas\logs</logpath>
+  <log mode="roll-by-size">
+    <sizeThreshold>10240</sizeThreshold>
+    <keepFiles>5</keepFiles>
+  </log>
+  <onfailure action="restart" delay="10 sec"/>
+  <onfailure action="restart" delay="30 sec"/>
+  <onfailure action="restart" delay="2 min"/>
+  <resetfailure>1 hour</resetfailure>
+</service>

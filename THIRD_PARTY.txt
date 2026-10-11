@@ -4,3 +4,6 @@
 - Inter — SIL Open Font License 1.1, https://rsms.me/inter/
 - DejaVu Sans Mono — Bitstream Vera Fonts License, https://dejavu-fonts.github.io/
 Устанавливаются при сборке образа: Starlette, Uvicorn, python-multipart (BSD), orjson (Apache-2.0/MIT), evtx / python-evtx (MIT/Apache-2.0).
+В сборки для Windows дополнительно входят: Python (PSF License), pystray (LGPL-3.0, без изменений — его можно
+заменить своей версией в python\Lib\site-packages), Pillow (MIT-CMU), six (MIT), WinSW (MIT,
+https://github.com/winsw/winsw). Установщик создан Inno Setup (https://jrsoftware.org/isinfo.php).

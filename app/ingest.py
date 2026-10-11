@@ -228,9 +228,15 @@ def n_workers() -> int:
 def _init_worker(counter):
     global _COUNTER
     _COUNTER = counter
+    # веб-интерфейс остаётся отзывчивым во время разбора
     try:
-        os.nice(5)          # веб-интерфейс остаётся отзывчивым во время разбора
-    except OSError:
+        if os.name == "nt":
+            import ctypes
+            k = ctypes.windll.kernel32
+            k.SetPriorityClass(k.GetCurrentProcess(), 0x4000)   # BELOW_NORMAL_PRIORITY_CLASS
+        else:
+            os.nice(5)
+    except (OSError, AttributeError):
         pass
 
 

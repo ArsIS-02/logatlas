@@ -21,14 +21,24 @@ from starlette.responses import FileResponse, JSONResponse, Response, StreamingR
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from . import analytics, collect, db, detections, ingest
+from . import analytics, collect, db, detections, ingest, winlocal
 from .parsers import SUPPORTED
 from .parsers.base import CATEGORIES
 from .timeutil import fmt_tz, ms_to_str
 
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 STATIC = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
 log = logging.getLogger("logatlas")
+
+# Как запущена панель: docker (образ), windows-app / windows-portable / windows-service (LogAtlas для Windows,
+# переменную ставит windows/launcher.pyw или служба) или python (запуск из исходников).
+RUNTIME = os.environ.get("LOGATLAS_RUNTIME") or ("docker" if os.path.exists("/.dockerenv") else "python")
+LOG_HINT = {
+    "docker": "журнал контейнера: docker compose logs logatlas",
+    "windows-app": "журнал приложения: %LOCALAPPDATA%\\LogAtlas\\logatlas.log",
+    "windows-portable": "журнал приложения: data\\logatlas.log рядом с LogAtlas.exe",
+    "windows-service": "журнал службы: %ProgramData%\\LogAtlas\\logs",
+}.get(RUNTIME, "вывод uvicorn в консоли")
 
 
 class NoCacheStatic(StaticFiles):
@@ -103,7 +113,9 @@ async def index(req):
 
 def meta(req):
     return J({"version": VERSION, "categories": CATEGORIES, "supported": SUPPORTED,
-              "rules": list(detections.ALL.values()), "inbox": db.INBOX_DIR})
+              "rules": list(detections.ALL.values()), "inbox": db.INBOX_DIR, "runtime": RUNTIME,
+              "log_hint": LOG_HINT, "local_collect": winlocal.ENABLED,
+              "host": (os.environ.get("COMPUTERNAME") or "") if winlocal.ENABLED else ""})
 
 
 def list_cases(req):
@@ -198,12 +210,25 @@ def delete_case(req):
         cat.execute("DELETE FROM files WHERE case_id=?", (cid,))
         cat.execute("DELETE FROM cases WHERE id=?", (cid,))
     for suffix in ("", "-wal", "-shm"):
-        try:
-            os.remove(db.case_path(cid) + suffix)
-        except OSError:
-            pass
+        _remove(db.case_path(cid) + suffix)
     shutil.rmtree(os.path.join(db.UPLOADS_DIR, cid), ignore_errors=True)
     return J({"ok": True})
+
+
+def _remove(path):
+    """Windows не удаляет открытый файл: соединение с базой сбора могло ещё не закрыться — повторяем."""
+    for i in range(10):
+        try:
+            os.remove(path)
+            return
+        except FileNotFoundError:
+            return
+        except OSError:
+            if os.name != "nt":
+                return
+            import gc
+            gc.collect()
+            time.sleep(0.2 * (i + 1))
 
 
 def _with_case(fn):
@@ -419,6 +444,37 @@ def _panel_host(req: Request) -> str:
     return host if collect.RE_ADDR.fullmatch(host or "") else ""
 
 
+LOOPBACK = ("127.0.0.1", "localhost", "::1")
+
+
+def _lan_ip() -> str:
+    """Адрес этого компьютера в локальной сети (UDP connect пакетов не отправляет)."""
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("192.0.2.1", 9))
+        ip = s.getsockname()[0]
+        return "" if ip.startswith("127.") else ip
+    except OSError:
+        return ""
+    finally:
+        s.close()
+
+
+def _script_panel_host(req: Request) -> str:
+    """Адрес панели для ограничения from= в скрипте подготовки. Панель открыта как 127.0.0.1 (LogAtlas для
+    Windows или запуск из исходников) — хост увидит её под адресом в локальной сети, его и подставляем."""
+    h = _panel_host(req)
+    if h in LOOPBACK and RUNTIME != "docker":
+        return _lan_ip() or h
+    return h
+
+
+def _local_only(req: Request) -> bool:
+    """Панель слушает только 127.0.0.1: хосты не скачают скрипт по ссылке, его нужно перенести вручную."""
+    return os.environ.get("LOGATLAS_BIND", "") in LOOPBACK and _panel_host(req) in LOOPBACK
+
+
 def _base(req: Request) -> str:
     host = req.headers.get("host") or ""
     return f"{req.url.scheme}://{host}" if re.fullmatch(r"[A-Za-z0-9.\-:\[\]]+", host) else ""
@@ -428,7 +484,8 @@ def collect_info(req):
     base = _base(req)
     return J({
         "available": collect.available(), "pubkey": collect.pubkey(), "user": collect.DEFAULT_USER,
-        "panel_host": _panel_host(req), "base": base,
+        "unavailable": collect.NO_SSH,
+        "panel_host": _script_panel_host(req), "base": base, "local_only": _local_only(req),
         "commands": {
             "unix": f"curl -fsSL {base}/setup/host.sh | sudo bash",
             "unix_remove": f"curl -fsSL {base}/setup/host.sh | sudo bash -s -- --remove",
@@ -444,7 +501,7 @@ def setup_script(req):
     if kind not in ("host.sh", "windows.ps1"):
         return Response("not found", status_code=404)
     try:
-        text = collect.setup_script("host" if kind == "host.sh" else "windows", _base(req), _panel_host(req))
+        text = collect.setup_script("host" if kind == "host.sh" else "windows", _base(req), _script_panel_host(req))
     except (OSError, RuntimeError) as e:
         return Response(f"echo 'LogAtlas: {e}'\n", media_type="text/plain; charset=utf-8", status_code=503)
     headers = {"Cache-Control": "no-store"}
@@ -506,6 +563,27 @@ async def collect_start(req: Request):
     return J({"id": cid})
 
 
+def _is_local(req: Request) -> bool:
+    return (req.client.host if req.client else "") in ("127.0.0.1", "::1")
+
+
+async def local_collect(req: Request):
+    if not winlocal.ENABLED:
+        return _err("Доступно только в приложении LogAtlas для Windows", 404)
+    if not _is_local(req):
+        return _err("Сбор журналов этого компьютера запускается только с него самого", 403)
+    try:
+        jid = await run_in_threadpool(winlocal.start, _base(req))
+    except RuntimeError as e:
+        return _err(str(e))
+    return J({"id": jid})
+
+
+def local_collect_status(req):
+    j = winlocal.status(req.path_params["jid"])
+    return J(j) if j else _err("Задание не найдено", 404)
+
+
 def health(req):
     return Response("ok")
 
@@ -537,6 +615,8 @@ routes = [
     Route("/api/cases/{cid}/ioc", ioc, methods=["POST"]),
     Route("/api/inbox", inbox),
     Route("/api/inbox/import", inbox_import, methods=["POST"]),
+    Route("/api/local/collect", local_collect, methods=["POST"]),
+    Route("/api/local/collect/{jid}", local_collect_status),
     Route("/api/collect/info", collect_info),
     Route("/api/collect", collect_start, methods=["POST"]),
     Route("/api/hosts", hosts_list, methods=["GET"]),
@@ -577,6 +657,8 @@ def _warm_overviews():
 def create_app():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     db.init()
+    if winlocal.ENABLED:
+        winlocal.cleanup()
     ingest.worker()
     threading.Thread(target=_warm_overviews, daemon=True, name="overview-warm").start()
     try:

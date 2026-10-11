@@ -7,3 +7,8 @@
 *.woff binary
 *.gz binary
 *.zip binary
+*.ico binary
+*.bmp binary
+*.iss text eol=crlf
+*.xml text eol=crlf
+windows/README-Windows.txt text eol=crlf

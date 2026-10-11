@@ -7,3 +7,6 @@ __pycache__/
 .DS_Store
 Thumbs.db
 *.swp
+# сборка для Windows
+/dist/
+/build/

@@ -1,0 +1,9 @@
+# Зависимости LogAtlas для Windows (ставятся в python\Lib\site-packages сборки, см. windows/build.ps1)
+starlette>=0.40,<2
+uvicorn>=0.30,<1
+python-multipart>=0.0.9
+orjson>=3.10
+evtx
+# значок в области уведомлений
+pystray>=0.19
+pillow>=10

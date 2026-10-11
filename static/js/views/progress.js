@@ -1,6 +1,6 @@
 // Ход сбора и обработки: кольцо прогресса и журнал шагов
 import { ring } from '../charts.js';
-import { fmtN, h, mount, raw } from '../util.js';
+import { RT, fmtN, h, mount, raw } from '../util.js';
 
 const two = (n) => String(n).padStart(2, '0');
 const clock = (t) => { const d = new Date(t * 1000); return `${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`; };
@@ -51,7 +51,7 @@ export function renderProgress(view, c) {
     mount(view, h`<div class="progress-card">
       <div class="note err" style="text-align:left">Обработка не удалась: ${c.message || 'неизвестная ошибка'}</div>
       ${stepsPanel(c)}
-      <p class="ink2">Проверьте, что архив не повреждён, и загрузите его снова. Подробности — в журнале контейнера: <span class="mono">docker compose logs logatlas</span>.</p>
+      <p class="ink2">Проверьте, что архив не повреждён, и загрузите его снова. Подробности — ${RT.logHint}.</p>
       <a class="btn" href="#/">К списку сборов</a></div>`);
     scrollDown(view);
     return;

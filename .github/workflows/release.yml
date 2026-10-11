@@ -101,6 +101,13 @@ jobs:
 
           Без доступа к реестру: скачайте архив под свою архитектуру ниже и выполните
           \`docker load -i $NAME-$V-linux-amd64.tar.gz\` (или \`…-arm64.tar.gz\`).
+
+          ## Windows (x64) без Docker
+
+          - \`LogAtlas-Setup-$V-x64.exe\` — установщик: ярлыки, значок в области уведомлений, по желанию — служба Windows;
+          - \`LogAtlas-$V-portable-x64.zip\` — переносная версия: распакуйте и запустите \`LogAtlas.exe\`.
+
+          Файлы для Windows появятся в релизе через несколько минут после публикации (их собирает отдельный workflow).
           EOF
           gh release create "$GITHUB_REF_NAME" --title "LogAtlas $V" --notes-file notes.md --generate-notes \
             "$NAME-$V-linux-amd64.tar.gz" "$NAME-$V-linux-arm64.tar.gz"

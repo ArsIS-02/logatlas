@@ -1,6 +1,6 @@
 // Хосты и сбор журналов по SSH: список хостов, подготовка, форма нового сбора
 import { api } from '../api.js';
-import { $, $$, fmtBytes, h, mount, platIcon, raw, toast } from '../util.js';
+import { $, $$, RT, fmtBytes, h, mount, platIcon, raw, toast } from '../util.js';
 
 const OS_NAME = { linux: 'Linux', macos: 'macOS', windows: 'Windows' };
 const PRESETS = [['24 часа', 24], ['3 дня', 72], ['7 дней', 168], ['30 дней', 720]];
@@ -74,7 +74,8 @@ export async function renderHosts(view) {
   };
 
   mount(view, h`
-    ${!info.available ? h`<div class="note err">В контейнере нет клиента SSH или ключа панели — сбор с хостов недоступен. Пересоберите образ: <span class="mono">docker compose up -d --build</span>.</div>` : ''}
+    ${!info.available && RT.runtime.startsWith('windows') ? h`<div class="note err">Сбор с хостов недоступен. ${info.unavailable}</div>` : ''}
+    ${!info.available && !RT.runtime.startsWith('windows') ? h`<div class="note err">В контейнере нет клиента SSH или ключа панели — сбор с хостов недоступен. Пересоберите образ: <span class="mono">docker compose up -d --build</span>.</div>` : ''}
     <section class="panel">
       <div class="panel-h"><h2>Хосты</h2><div class="tools"><button class="btn primary small" type="button" id="h-add">+ Хост</button></div></div>
       <div id="h-form" class="hidden"></div>
@@ -100,12 +101,13 @@ export async function renderHosts(view) {
         <div class="setup-os">
           <h3>${raw(platIcon('linux'))} Linux и ${raw(platIcon('macos'))} macOS</h3>
           <p class="muted small-t">В терминале хоста, под пользователем с правом sudo. Создаётся системный пользователь <span class="mono">${info.user}</span> без пароля:</p>
-          <div class="cmdline"><code>${info.commands.unix}</code>${copyBtn(info.commands.unix)}</div>
+          ${info.local_only ? h`<p class="muted small-t">Панель открыта только на этом компьютере, поэтому хост не скачает скрипт по ссылке. Скачайте его: <a class="btn small" href="/setup/host.sh" download="logatlas-host-setup.sh">logatlas-host-setup.sh</a>, перенесите на хост (например, <span class="mono">scp logatlas-host-setup.sh пользователь@хост:</span>) и выполните там <span class="mono">sudo bash logatlas-host-setup.sh</span>. Либо откройте панель для сети: <span class="mono">"host": "0.0.0.0"</span> в settings.json или служба Windows.</p>`
+    : h`<div class="cmdline"><code>${info.commands.unix}</code>${copyBtn(info.commands.unix)}</div>`}
           <p class="muted small-t">На macOS заранее включите «Удалённый вход»: Системные настройки → Основные → Общий доступ.</p>
         </div>
         <div class="setup-os">
           <h3>${raw(platIcon('windows'))} Windows 10/11</h3>
-          <p class="muted small-t">1. Скачайте скрипт на этот хост: <a class="btn small" href="${info.commands.windows_url}" download="logatlas-setup.ps1">logatlas-setup.ps1</a></p>
+          <p class="muted small-t">1. Скачайте скрипт${info.local_only ? ' и перенесите его на хост' : ' на этот хост'}: <a class="btn small" href="${info.commands.windows_url}" download="logatlas-setup.ps1">logatlas-setup.ps1</a></p>
           <p class="muted small-t">2. В PowerShell от имени администратора перейдите в папку с файлом (<span class="mono">cd</span>) и выполните. Скрипт включит встроенный OpenSSH Server и добавит ключ панели к вашей учётной записи — новых пользователей не создаёт, ваш пароль и ваши ключи не трогает:</p>
           <div class="cmdline"><code>${info.commands.windows}</code>${copyBtn(info.commands.windows)}</div>
           <p class="muted small-t">В карточке хоста укажите имя этой учётной записи — скрипт напишет его в конце. Отдельный пользователь вместо вашей записи: добавьте к команде <span class="mono">-CreateUser</span>.</p>

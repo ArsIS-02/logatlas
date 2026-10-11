@@ -43,6 +43,35 @@ RE_SRC = re.compile(r"[a-z][a-z0-9_-]{0,31}")
 _lock = threading.RLock()
 JOBS: dict[str, subprocess.Popen] = {}
 
+WINDOWS = os.name == "nt"
+# На Windows консольные программы (ssh, icacls) запускаются без всплывающего окна консоли
+NOWIN = {"creationflags": 0x08000000} if WINDOWS else {}   # CREATE_NO_WINDOW
+NO_SSH = ("Не найден клиент OpenSSH. Windows: Параметры → Приложения → Дополнительные компоненты → "
+          "«Клиент OpenSSH»." if WINDOWS else "В контейнере нет ssh или ключа панели — пересоберите образ LogAtlas")
+
+
+def _tool(name: str) -> str | None:
+    """Путь к ssh / ssh-keygen. На Windows — ещё и встроенный клиент OpenSSH, если его нет в PATH."""
+    p = shutil.which(name)
+    if p or not WINDOWS:
+        return p
+    p = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "OpenSSH", name + ".exe")
+    return p if os.path.isfile(p) else None
+
+
+def _protect_key(path: str):
+    """Windows: OpenSSH отвергает ключ, который могут читать другие. Оставляем доступ только
+    текущей учётной записи, SYSTEM и администраторам (SID — чтобы не зависеть от языка Windows)."""
+    try:
+        out = subprocess.run(["whoami", "/user", "/fo", "csv", "/nh"], capture_output=True, text=True,
+                             timeout=20, **NOWIN).stdout
+        sid = out.strip().rsplit(",", 1)[-1].strip().strip('"')
+        grants = ["*S-1-5-18:F", "*S-1-5-32-544:F"] + ([f"*{sid}:F"] if sid.startswith("S-1-") else [])
+        subprocess.run(["icacls", path, "/inheritance:r", "/grant:r", *grants], capture_output=True,
+                       timeout=20, check=True, **NOWIN)
+    except (OSError, subprocess.SubprocessError) as e:
+        log.warning("cannot restrict access to %s: %s", path, e)
+
 
 # ---------------------------------------------------------------------------
 # ключ панели
@@ -54,15 +83,18 @@ def ensure_key():
         pass
     if os.path.exists(KEY) and os.path.exists(KEY + ".pub"):
         return
-    if not shutil.which("ssh-keygen"):
+    keygen = _tool("ssh-keygen")
+    if not keygen:
         log.warning("ssh-keygen not found: collection from hosts is unavailable")
         return
     for p in (KEY, KEY + ".pub"):
         if os.path.exists(p):
             os.remove(p)
-    subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", f"logatlas@{socket.gethostname()}", "-f", KEY],
-                   check=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    subprocess.run([keygen, "-q", "-t", "ed25519", "-N", "", "-C", f"logatlas@{socket.gethostname()}", "-f", KEY],
+                   check=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, **NOWIN)
     os.chmod(KEY, 0o600)
+    if WINDOWS:
+        _protect_key(KEY)
 
 
 def pubkey() -> str:
@@ -74,7 +106,7 @@ def pubkey() -> str:
 
 
 def available() -> bool:
-    return bool(shutil.which("ssh")) and os.path.exists(KEY)
+    return bool(_tool("ssh")) and os.path.exists(KEY)
 
 
 # ---------------------------------------------------------------------------
@@ -178,10 +210,25 @@ def _set_scan(hid: str, scan: dict | None):
 
 # ---------------------------------------------------------------------------
 # SSH
+def _opt_path(p: str) -> str:
+    # значение -o ssh делит по пробелам: путь с пробелами (C:\Users\Имя Фамилия\…) — в кавычках
+    return f'"{p}"' if " " in p else p
+
+
+def _global_known_hosts() -> str:
+    if not WINDOWS:
+        return "/dev/null"
+    p = os.path.join(KEYS_DIR, "known_hosts.empty")       # у Windows нет /dev/null — пустой файл
+    if not os.path.exists(p):
+        os.makedirs(KEYS_DIR, exist_ok=True)
+        open(p, "w").close()
+    return _opt_path(p)
+
+
 def ssh_cmd(h: dict, command: str) -> list[str]:
-    return ["ssh", "-i", KEY, "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes",
-            "-o", "StrictHostKeyChecking=accept-new", "-o", f"UserKnownHostsFile={KNOWN_HOSTS}",
-            "-o", "GlobalKnownHostsFile=/dev/null", "-o", "ConnectTimeout=10",
+    return [_tool("ssh") or "ssh", "-i", KEY, "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes",
+            "-o", "StrictHostKeyChecking=accept-new", "-o", f"UserKnownHostsFile={_opt_path(KNOWN_HOSTS)}",
+            "-o", f"GlobalKnownHostsFile={_global_known_hosts()}", "-o", "ConnectTimeout=10",
             "-o", "ServerAliveInterval=20", "-o", "ServerAliveCountMax=6", "-o", "LogLevel=ERROR",
             "-p", str(h["port"]), "-l", h["user"], "--", h["address"], command]
 
@@ -216,9 +263,9 @@ def scan(hid: str) -> dict:
     if not h:
         raise KeyError(hid)
     if not available():
-        raise RuntimeError("В контейнере нет ssh или ключа панели — пересоберите образ LogAtlas")
+        raise RuntimeError(NO_SSH)
     try:
-        p = subprocess.run(ssh_cmd(h, "scan"), capture_output=True, timeout=120, stdin=subprocess.DEVNULL)
+        p = subprocess.run(ssh_cmd(h, "scan"), capture_output=True, timeout=120, stdin=subprocess.DEVNULL, **NOWIN)
     except subprocess.TimeoutExpired:
         raise RuntimeError("Хост не ответил за 2 минуты") from None
     out = p.stdout.decode("utf-8", "replace").strip()
@@ -246,7 +293,7 @@ def reset_hostkey(hid: str):
         raise KeyError(hid)
     name = h["address"] if h["port"] == 22 else f"[{h['address']}]:{h['port']}"
     if os.path.exists(KNOWN_HOSTS):
-        subprocess.run(["ssh-keygen", "-R", name, "-f", KNOWN_HOSTS], capture_output=True)
+        subprocess.run([_tool("ssh-keygen") or "ssh-keygen", "-R", name, "-f", KNOWN_HOSTS], capture_output=True, **NOWIN)
 
 
 # ---------------------------------------------------------------------------
@@ -264,7 +311,7 @@ def start(body: dict) -> str:
     if not h:
         raise ValueError("Хост не найден")
     if not available():
-        raise ValueError("В контейнере нет ssh или ключа панели — пересоберите образ LogAtlas")
+        raise ValueError(NO_SSH)
     try:
         since, until = int(body["since"]), int(body["until"])
     except (KeyError, TypeError, ValueError):
@@ -321,7 +368,7 @@ def _run(cid: str, h: dict, command: str, tz: int):
 
     try:
         with open(path, "wb") as out:
-            p = subprocess.Popen(ssh_cmd(h, command), stdout=out, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL)
+            p = subprocess.Popen(ssh_cmd(h, command), stdout=out, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, **NOWIN)
             JOBS[cid] = p
             mon = threading.Thread(target=monitor, daemon=True)
             mon.start()

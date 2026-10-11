@@ -2,3 +2,6 @@ data
 **/__pycache__
 *.pyc
 .git
+windows
+dist
+build

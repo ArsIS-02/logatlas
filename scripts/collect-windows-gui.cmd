@@ -61,7 +61,15 @@ try {
     if ($null -ne $j.Period -and [int]$j.Period -ge 0 -and [int]$j.Period -le 5) { $cfg.Period = [int]$j.Period }
   }
 } catch { }
+# Запуск из приложения LogAtlas для Windows («Собрать журналы этого компьютера»): архив кладётся
+# в папку, которую приложение забирает на разбор само, а настройки сборщика не меняются.
+$LaDesktop = [bool]$env:LA_OUT
+if ($LaDesktop) {
+  $cfg.OutDir = [string]$env:LA_OUT
+  if ($env:LA_URL) { $cfg.Url = [string]$env:LA_URL }
+}
 function Save-Cfg {
+  if ($LaDesktop) { return }
   try {
     New-Item -ItemType Directory -Force -Path $cfgDir | Out-Null
     [IO.File]::WriteAllText($cfgFile, (@{ OutDir = $cfg.OutDir; Url = $cfg.Url; Period = $cfg.Period } | ConvertTo-Json))
@@ -270,6 +278,7 @@ $form.AcceptButton = $btnMain
 
 $form.Controls.AddRange(@($lblTitle, $lblInfo, $lv, $lblSum, $lblPeriod, $cmbPeriod, $dtFrom, $lblDash, $dtTo, $lblTz, $lblOut, $txtOut, $btnBrowse, $lblTemp, $pb, $lblStatus,
                           $lblNext, $lblUrl, $txtUrl, $btnOpen, $btnMain, $btnClose))
+if ($LaDesktop) { foreach ($c in @($lblOut, $txtOut, $btnBrowse)) { $c.Visible = $false } }
 
 $avail = 0
 foreach ($l in $logs) {
@@ -481,6 +490,13 @@ function Finish-Done {
   $btnMain.Text = 'Показать в Проводнике'
   $btnMain.Enabled = $true
   $form.AcceptButton = $btnMain
+  if ($LaDesktop) {
+    $lblNext.Text = ("Что дальше:`n" +
+      "Архив передан в LogAtlas — разбор начнётся сам, ход виден в окне браузера.`n" +
+      "Это окно можно закрыть.")
+    foreach ($c in @($lblOut, $txtOut, $btnBrowse, $btnMain)) { $c.Visible = $false }
+    $form.AcceptButton = $btnClose
+  }
   [System.Media.SystemSounds]::Asterisk.Play()
 }
 

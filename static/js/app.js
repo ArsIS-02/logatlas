@@ -2,7 +2,7 @@
 import { api } from './api.js';
 import { ribbon } from './charts.js';
 import {
-  $, $$, CAT_KEYS, PLATFORMS, fmtN, fmtSpan, fmtTime, h, mount, platIcon, platName, plural, raw, toast,
+  $, $$, CAT_KEYS, PLATFORMS, RT, fmtN, fmtSpan, fmtTime, h, mount, platIcon, platName, plural, raw, toast,
 } from './util.js';
 import { renderHome } from './views/home.js';
 import { renderOverview } from './views/overview.js';
@@ -382,6 +382,8 @@ async function boot() {
   try {
     S.meta = await api.get('/api/meta');
     $('#ver').textContent = `v${S.meta.version}`;
+    if (S.meta.runtime) RT.runtime = S.meta.runtime;
+    if (S.meta.log_hint) RT.logHint = S.meta.log_hint;
   } catch (e) { S.meta = { categories: {}, supported: {}, rules: [] }; }
   await loadCases();
   window.addEventListener('hashchange', route);

@@ -5,6 +5,9 @@ export const CATS = {
 };
 export const CAT_KEYS = Object.keys(CATS);
 
+/** Как запущена панель (заполняет app.js из /api/meta): подсказки об ошибках зависят от этого */
+export const RT = { runtime: 'docker', logHint: 'журнал контейнера: docker compose logs logatlas' };
+
 export const SEV = {
   critical: { name: 'Критично', icon: 'octagon' },
   high: { name: 'Высокая', icon: 'triangle' },

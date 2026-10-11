@@ -1,0 +1,84 @@
+# LogAtlas для Windows (x64): установщик, переносной zip и служба.
+# Собирает и проверяет на чистой Windows при каждом изменении; готовые файлы — в артефактах запуска
+# (Actions → Windows → Artifacts). При теге vX.Y.Z прикладывает их к релизу, который создаёт release.yml.
+name: Windows
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          architecture: x64
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Версия
+        id: ver
+        run: |
+          $v = (Select-String -Path app\main.py -Pattern '^VERSION = "(.+)"').Matches[0].Groups[1].Value
+          if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            $t = $env:GITHUB_REF_NAME.TrimStart('v')
+            if ($t -ne $v) { throw "Тег $env:GITHUB_REF_NAME не совпадает с VERSION = $v в app/main.py" }
+          }
+          "version=$v" >> $env:GITHUB_OUTPUT
+
+      - name: Inno Setup
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
+
+      - name: Сборка
+        run: ./windows/build.ps1 -Version ${{ steps.ver.outputs.version }}
+
+      - name: Проверка
+        run: ./windows/smoke.ps1 -Version ${{ steps.ver.outputs.version }}
+
+      - name: Журналы при сбое
+        if: failure()
+        run: |
+          foreach ($d in "$env:LOCALAPPDATA\LogAtlas", "$env:ProgramData\LogAtlas\logs") {
+            Get-ChildItem $d -Filter *.log -ErrorAction SilentlyContinue | ForEach-Object { "---- $($_.FullName)"; Get-Content $_.FullName -Tail 60 }
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LogAtlas-${{ steps.ver.outputs.version }}-windows-x64
+          path: |
+            dist/LogAtlas-Setup-*.exe
+            dist/LogAtlas-*-portable-x64.zip
+            dist/SHA256SUMS-windows.txt
+          if-no-files-found: error
+
+      - name: В релиз
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # релиз создаёт release.yml (образы Docker собираются дольше) — ждём его до 45 минут
+          for ($i = 0; $i -lt 90; $i++) {
+            gh release view $env:GITHUB_REF_NAME --json tagName 2>$null | Out-Null
+            if ($LASTEXITCODE -eq 0) { break }
+            Start-Sleep -Seconds 30
+          }
+          if ($LASTEXITCODE -ne 0) { throw "Релиз $env:GITHUB_REF_NAME так и не появился" }
+          $files = @(Get-ChildItem dist -File | Where-Object { $_.Name -like 'LogAtlas-*' -or $_.Name -eq 'SHA256SUMS-windows.txt' } | ForEach-Object FullName)
+          gh release upload $env:GITHUB_REF_NAME @files --clobber
