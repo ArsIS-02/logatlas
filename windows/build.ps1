@@ -16,6 +16,9 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
+# вывод Python в UTF-8: в консоли Windows по умолчанию cp1252/cp866, и кириллица роняет print
+$env:PYTHONUTF8 = '1'
+$env:PYTHONIOENCODING = 'utf-8'
 $repo = Split-Path $PSScriptRoot -Parent
 Set-Location $repo
 
@@ -100,7 +103,7 @@ Check 'compileall'
 Push-Location $env:TEMP
 $env:LOGATLAS_DATA = Join-Path $build 'check-data'     # import app.main создаёт папку данных
 try {
-  & (Join-Path $dist 'python\python.exe') -c "import app.main, starlette, uvicorn, multipart, orjson, pystray, PIL, importlib.util as u; assert u.find_spec('evtx') or u.find_spec('Evtx'), 'evtx'; print('модули на месте:', app.main.VERSION)"
+  & (Join-Path $dist 'python\python.exe') -c "import app.main, starlette, uvicorn, multipart, orjson, pystray, PIL, importlib.util as u; assert u.find_spec('evtx') or u.find_spec('Evtx'), 'evtx'; print('modules ok, LogAtlas', app.main.VERSION)"
   Check 'проверка модулей'
 } finally { Pop-Location; Remove-Item Env:LOGATLAS_DATA }
 

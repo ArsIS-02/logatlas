@@ -13,6 +13,9 @@ on:
 permissions:
   contents: write
 
+env:
+  PYTHONUTF8: "1"
+
 jobs:
   windows:
     runs-on: windows-latest
@@ -49,6 +52,17 @@ jobs:
       - name: Сборка
         run: ./windows/build.ps1 -Version ${{ steps.ver.outputs.version }}
 
+      # файлы выкладываются до проверок: их можно скачать и попробовать, даже если проверка упадёт;
+      # в релиз по тегу они попадают только после успешной проверки
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LogAtlas-${{ steps.ver.outputs.version }}-windows-x64
+          path: |
+            dist/LogAtlas-Setup-*.exe
+            dist/LogAtlas-*-portable-x64.zip
+            dist/SHA256SUMS-windows.txt
+          if-no-files-found: error
+
       - name: Проверка
         run: ./windows/smoke.ps1 -Version ${{ steps.ver.outputs.version }}
 
@@ -58,15 +72,6 @@ jobs:
           foreach ($d in "$env:LOCALAPPDATA\LogAtlas", "$env:ProgramData\LogAtlas\logs") {
             Get-ChildItem $d -Filter *.log -ErrorAction SilentlyContinue | ForEach-Object { "---- $($_.FullName)"; Get-Content $_.FullName -Tail 60 }
           }
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: LogAtlas-${{ steps.ver.outputs.version }}-windows-x64
-          path: |
-            dist/LogAtlas-Setup-*.exe
-            dist/LogAtlas-*-portable-x64.zip
-            dist/SHA256SUMS-windows.txt
-          if-no-files-found: error
 
       - name: В релиз
         if: github.ref_type == 'tag'
