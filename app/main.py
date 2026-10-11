@@ -26,7 +26,7 @@ from .parsers import SUPPORTED
 from .parsers.base import CATEGORIES
 from .timeutil import fmt_tz, ms_to_str
 
-VERSION = "1.2.1"
+VERSION = "1.2.2"
 STATIC = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
 log = logging.getLogger("logatlas")
 
@@ -92,6 +92,11 @@ def _case_public(c, with_log=False):
 
 
 # ---------------------------------------------------------------------------
+def _icon(rel, media_type):
+    """Значки и манифест по адресам, которые браузеры запрашивают сами (ярлыки, плитки, «На главный экран»)."""
+    return FileResponse(os.path.join(STATIC, rel), media_type=media_type, headers={"Cache-Control": "public, max-age=86400"})
+
+
 async def index(req):
     return FileResponse(os.path.join(STATIC, "index.html"), headers={"Cache-Control": "no-cache"})
 
@@ -508,6 +513,10 @@ def health(req):
 routes = [
     Route("/", index),
     Route("/healthz", health),
+    Route("/favicon.ico", lambda r: _icon("icons/favicon.ico", "image/x-icon")),
+    Route("/apple-touch-icon.png", lambda r: _icon("icons/apple-touch-icon.png", "image/png")),
+    Route("/apple-touch-icon-precomposed.png", lambda r: _icon("icons/apple-touch-icon.png", "image/png")),
+    Route("/manifest.webmanifest", lambda r: _icon("manifest.webmanifest", "application/manifest+json")),
     Route("/api/meta", meta),
     Route("/api/cases", list_cases, methods=["GET"]),
     Route("/api/cases", create_case, methods=["POST"]),
