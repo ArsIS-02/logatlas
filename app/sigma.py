@@ -676,7 +676,10 @@ def init():
 
 def _version():
     with db.catalog() as c:
-        r = c.execute("SELECT count(*), max(updated), sum(enabled) FROM sigma_rules").fetchone()
+        try:
+            r = c.execute("SELECT count(*), max(updated), sum(enabled) FROM sigma_rules").fetchone()
+        except sqlite3.OperationalError:            # каталог без таблицы правил — правил нет
+            return (0, None, None)
     return tuple(r)
 
 
@@ -687,6 +690,9 @@ def _load_meta() -> dict:
         if _cache["version"] == v:
             return _cache["meta"]
         meta = {}
+        if not v[0]:
+            _cache.update(version=v, meta=meta)
+            return meta
         with db.catalog() as c:
             for rid, title, level, desc, tags, product in c.execute(
                     "SELECT id, title, level, description, tags, product FROM sigma_rules"):
@@ -704,6 +710,9 @@ def _load_rules() -> dict:
         if _cache["rules_version"] == v:
             return _cache["rules"]
         rules = {}
+        if not v[0]:
+            _cache.update(rules_version=v, rules=rules)
+            return rules
         with db.catalog() as c:
             rows = c.execute("SELECT id, yaml FROM sigma_rules WHERE enabled=1 AND error IS NULL").fetchall()
         for rid, text in rows:

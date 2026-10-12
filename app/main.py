@@ -26,7 +26,7 @@ from .parsers import SUPPORTED
 from .parsers.base import CATEGORIES
 from .timeutil import fmt_tz, ms_to_str
 
-VERSION = "1.5.0"
+VERSION = "1.5.1"
 STATIC = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
 log = logging.getLogger("logatlas")
 
@@ -696,7 +696,8 @@ async def local_collect(req: Request):
             jid = maclocal.start((body or {}).get("days", 3))
     except RuntimeError as e:
         return _err(str(e))
-    return J({"id": jid})
+    j = winlocal.status(jid) or maclocal.status(jid) or {}
+    return J({"id": jid, "case": j.get("case")})
 
 
 def local_collect_status(req):

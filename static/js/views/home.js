@@ -83,7 +83,7 @@ export async function renderHome(view, { platform, cases, meta, refresh }) {
         <span class="ink2">${raw(platIcon(c.platform))}</span>
         <span title="${c.name}"><span class="nm">${c.name}</span><span class="sm">${c.host || platName(c.platform)}</span></span>
         <span class="sm hide-m num">${c.events ? `${fmtN(c.events)} событий` : ''}</span>
-        <span class="status ${c.status}"><i></i>${{ ready: 'Готово', processing: 'Обработка', queued: 'В очереди', error: 'Ошибка', collecting: 'Сбор с хоста' }[c.status] || c.status}</span>
+        <span class="status ${c.status}"><i></i>${{ ready: 'Готово', processing: 'Обработка', queued: 'В очереди', error: 'Ошибка', collecting: 'Идёт сбор' }[c.status] || c.status}</span>
         <span class="sm hide-m">${c.t_min ? `${fmtTime(c.t_min, 'date')} — ${fmtTime(c.t_max, 'date')}` : ''}</span>
         <span class="sm">${fmtTime(c.created * 1000 + (-new Date().getTimezoneOffset() * 60000), 'short')}</span>
       </a>`) : h`<div class="empty">Здесь появятся загруженные и собранные с хостов журналы.</div>`}
@@ -193,23 +193,7 @@ export async function renderHome(view, { platform, cases, meta, refresh }) {
   // Журналы этого компьютера (LogAtlas для Windows: окно сборщика; для macOS: период и пароль администратора)
   const lc = $('#local-collect');
   const box = $('#local-box');
-  const watch = (job) => {
-    const timer = setInterval(async () => {
-      let j;
-      try { j = await api.get(`/api/local/collect/${job.id}`); } catch (e) { return; }
-      if (j.stage && document.body.contains(box)) mount(box, h`<span class="spinner"></span> ${j.stage}`);
-      if (j.state === 'done') {
-        clearInterval(timer);
-        window.dispatchEvent(new Event('la:cases-changed'));
-        window.location.hash = `#/c/${j.case}/overview`;
-      } else if (j.state === 'closed' || j.state === 'error') {
-        clearInterval(timer);
-        if (document.body.contains(lc)) lc.disabled = false;
-        if (document.body.contains(box)) box.classList.add('hidden');
-        toast(j.error || 'Сбор не выполнен');
-      }
-    }, meta.local_collect === 'macos' ? 1000 : 2000);
-  };
+  // сбор сразу появляется в списке сборов: открываем его страницу — там ход сбора, и он не теряется
   const startLocal = async (body) => {
     lc.disabled = true;
     let job;
@@ -217,17 +201,12 @@ export async function renderHome(view, { platform, cases, meta, refresh }) {
       job = await api.post('/api/local/collect', body);
     } catch (e) {
       lc.disabled = false;
-      box.classList.add('hidden');
       toast(e.message);
       return;
     }
-    if (meta.local_collect === 'macos') {
-      box.classList.remove('hidden');
-      mount(box, h`<span class="spinner"></span> Подтвердите права администратора в окне macOS…`);
-    } else {
-      toast('Открыто окно сборщика: выберите период и нажмите «Собрать». Архив разберётся сам.');
-    }
-    watch(job);
+    if (meta.local_collect !== 'macos') toast('Открыто окно сборщика: выберите журналы и период и нажмите «Собрать». Архив разберётся сам.');
+    window.dispatchEvent(new Event('la:cases-changed'));
+    if (job.case) window.location.hash = `#/c/${job.case}/overview`;
   };
   if (lc) {
     lc.addEventListener('click', () => {

@@ -163,7 +163,7 @@ async function onSideClick(e) {
 }
 
 export function statusName(s) {
-  return { ready: 'готово', processing: 'обработка', queued: 'в очереди', error: 'ошибка', collecting: 'сбор с хоста' }[s] || s;
+  return { ready: 'готово', processing: 'обработка', queued: 'в очереди', error: 'ошибка', collecting: 'идёт сбор' }[s] || s;
 }
 
 // ---------------------------------------------------------------------------

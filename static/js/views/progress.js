@@ -40,7 +40,7 @@ function scrollDown(view) {
 export function renderProgress(view, c) {
   if (c.status === 'error' && c.stage === 'Сбор не удался') {
     mount(view, h`<div class="progress-card">
-      <div class="note err" style="text-align:left">Сбор с хоста не удался: ${c.message || 'неизвестная ошибка'}</div>
+      <div class="note err" style="text-align:left">Сбор не удался: ${c.message || 'неизвестная ошибка'}</div>
       ${stepsPanel(c)}
       <div class="btn-row" style="justify-content:center;margin-top:16px"><a class="btn primary" href="#/hosts">К хостам</a><a class="btn" href="#/">К списку сборов</a></div>
       <p class="muted" style="font-size:12.5px">Этот сбор можно удалить корзиной в боковой панели.</p></div>`);
@@ -92,5 +92,5 @@ export function renderProgress(view, c) {
 }
 
 function title(c) {
-  return { queued: 'Сбор в очереди на разбор', collecting: 'Собираю журналы с хоста' }[c.status] || 'Разбираю журналы';
+  return { queued: 'Сбор в очереди на разбор', collecting: 'Собираю журналы' }[c.status] || 'Разбираю журналы';
 }

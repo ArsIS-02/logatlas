@@ -62,8 +62,8 @@ def _set(jid: str, **kw):
         JOBS[jid].update(kw)
 
 
-def _watch_progress(jid: str, path: str, stop: threading.Event):
-    """Строки LOGATLAS-PROGRESS из сборщика → понятный этап для страницы."""
+def _watch_progress(jid: str, cid: str, path: str, stop: threading.Event):
+    """Строки LOGATLAS-PROGRESS / LOGATLAS-RESULT из сборщика → этап и журнал шагов сбора."""
     pos = 0
     while not stop.is_set():
         try:
@@ -76,13 +76,26 @@ def _watch_progress(jid: str, path: str, stop: threading.Event):
         for line in chunk.splitlines():
             m = re.match(r"LOGATLAS-PROGRESS (\d+) (\d+) (.*)", line)
             if m:
-                _set(jid, state="collecting", stage=f"Собираю «{m.group(3)}» ({m.group(1)} из {m.group(2)})…")
+                i, n, label = int(m.group(1)), max(1, int(m.group(2))), m.group(3)
+                _set(jid, state="collecting")
+                winlocal.case_stage(cid, f"Сбор на этом Mac: {i} из {n} — {label}", 0.02 + 0.07 * (i - 1) / n,
+                                    f"Собираю «{label}» ({i} из {n})…")
             elif line.startswith("LOGATLAS-PROGRESS pack"):
-                _set(jid, state="collecting", stage="Упаковка архива…")
+                winlocal.case_stage(cid, "Упаковка архива", 0.09, "Упаковка архива")
+            elif line.startswith("LOGATLAS-RESULT "):
+                parts = line.split(" ", 2)
+                label, _, detail = (parts[2] if len(parts) > 2 else "").partition("|")
+                if winlocal.case_alive(cid):
+                    if parts[1] == "ok":
+                        db.add_log(cid, "ok", f"{label}: {detail}" if detail else label)
+                    elif parts[1] == "empty":
+                        db.add_log(cid, "info", f"{label}: нет записей за период")
+                    else:
+                        db.add_log(cid, "warn", f"{label}: {detail or 'не удалось собрать'}")
         stop.wait(1)
 
 
-def _run(jid: str, days: int, out_dir: str):
+def _run(jid: str, cid: str, days: int, out_dir: str):
     script = os.path.join(collect.SCRIPTS_DIR, "collect-macos.sh")
     until = int(time.time())
     since = until - days * 86400
@@ -94,15 +107,18 @@ def _run(jid: str, days: int, out_dir: str):
     osa = (f"do shell script {_applescript_str(cmd)} with administrator privileges "
            f"with prompt {_applescript_str('LogAtlas собирает журналы этого Mac: нужны права администратора, чтобы прочитать системные журналы.')}")
     stop = threading.Event()
-    threading.Thread(target=_watch_progress, args=(jid, progress, stop), daemon=True).start()
+    threading.Thread(target=_watch_progress, args=(jid, cid, progress, stop), daemon=True).start()
+    t0 = time.time()
     try:
-        _set(jid, state="waiting", stage="Подтвердите права администратора в окне macOS…")
+        _set(jid, state="waiting")
         p = subprocess.run(["/usr/bin/osascript", "-e", osa], capture_output=True, text=True)
         stop.set()
+        time.sleep(1.1)                               # последние строки хода — в журнал шагов
         err = (p.stderr or "").strip()
         if p.returncode != 0:
             if "-128" in err or "canceled" in err.lower() or "отмен" in err.lower():
-                _set(jid, state="closed", error="Сбор отменён: без прав администратора системные журналы не прочитать")
+                msg = "Сбор отменён: без прав администратора системные журналы этого Mac не прочитать"
+                _set(jid, state="closed", error=msg)
             else:
                 tail = ""
                 try:
@@ -111,20 +127,23 @@ def _run(jid: str, days: int, out_dir: str):
                         tail = lines[-1] if lines else ""
                 except OSError:
                     pass
-                msg = "За выбранный период в журналах нет записей" if "(12)" in err or "status 12" in err \
-                    else (tail or err or f"код {p.returncode}")
-                _set(jid, state="error", error=f"Сбор не удался: {msg}")
+                msg = "За выбранный период в журналах нет записей — выберите период шире" if "(12)" in err \
+                    else f"Сбор не удался: {tail or err or f'код {p.returncode}'}"
+                _set(jid, state="error", error=msg)
+            winlocal.case_fail(cid, msg)
             return
         if not os.path.exists(archive) or os.path.getsize(archive) == 0:
             _set(jid, state="error", error="Сборщик не создал архив")
+            winlocal.case_fail(cid, "Сборщик не создал архив")
             return
-        _set(jid, stage="Ставлю на разбор…")
-        cid = winlocal.import_archive(archive, platform="macos", host=_host(),
-                                      how=f"на этом Mac за {days} сут.")
-        _set(jid, state="done", case=cid, stage="Готово")
+        took = time.time() - t0
+        winlocal.import_archive(archive, platform="macos", host=host(), case_id=cid,
+                                how=f"на этом Mac за {days} сут. (сбор занял {int(took // 60)}:{int(took % 60):02d})")
+        _set(jid, state="done")
     except Exception as e:  # noqa: BLE001
         log.exception("local collect failed")
         _set(jid, state="error", error=str(e))
+        winlocal.case_fail(cid, f"Сбор не удался: {e}")
     finally:
         stop.set()
         shutil.rmtree(out_dir, ignore_errors=True)
@@ -139,18 +158,19 @@ def start(days: int = 3) -> str:
         days = 3
     if days not in PERIODS:
         days = 3
-    with _lock:
-        if any(j["state"] in ("starting", "waiting", "collecting") for j in JOBS.values()):
-            raise RuntimeError("Сбор журналов этого Mac уже идёт")
+    busy = winlocal.active_job(JOBS, _lock)
+    if busy:                                       # сбор уже идёт — открыть его, а не запускать второй
+        return busy["id"]
     if not os.path.isfile(os.path.join(collect.SCRIPTS_DIR, "collect-macos.sh")):
         raise RuntimeError("Не найден сборщик scripts/collect-macos.sh — скачайте LogAtlas заново")
     jid = uuid.uuid4().hex[:8]
     out_dir = os.path.join(LOCAL_DIR, jid)
     os.makedirs(out_dir, exist_ok=True)
+    cid = winlocal.create_case("macos", host(), "Подтвердите права администратора в окне macOS…")
+    db.add_log(cid, "info", f"Период: последние {days} сут.; нужны права администратора — macOS спросит пароль в своём окне")
     with _lock:
-        JOBS[jid] = {"id": jid, "state": "starting", "case": None, "error": None, "stage": "Запуск…",
-                     "started": time.time(), "days": days}
-    threading.Thread(target=_run, args=(jid, days, out_dir), daemon=True, name=f"local-{jid}").start()
+        JOBS[jid] = {"id": jid, "state": "starting", "case": cid, "error": None, "started": time.time(), "days": days}
+    threading.Thread(target=_run, args=(jid, cid, days, out_dir), daemon=True, name=f"local-{jid}").start()
     return jid
 
 
