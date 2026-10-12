@@ -22,6 +22,8 @@ report() {
     if [ -s "${WORK:-}/installer.log" ]; then echo '--- вывод installer:'; tail -n 30 "${WORK}/installer.log"; fi
     if [ -d "${EXP:-}" ]; then echo '--- состав пакета:'; find "$EXP" -maxdepth 3 -print 2>/dev/null | head -n 25; fi
     echo "--- квитанции: $(pkgutil --pkgs 2>/dev/null | grep -i logatlas || echo 'нет')"
+    echo "--- что поставлено по квитанции:"; pkgutil --files io.github.arsis-02.logatlas 2>&1 | head -n 8
+    echo "--- /Applications: $(ls /Applications 2>/dev/null | head -n 12 | tr '\n' ' ')"
     echo "--- /Applications/LogAtlas.app: $([ -d /Applications/LogAtlas.app ] && echo есть || echo нет)"
     if [ -s "${WORK:-}/installed.log" ]; then echo '--- вывод установленной программы:'; tail -n 15 "${WORK}/installed.log"; fi
   } > "$DATA/smoke-fail.log" 2>&1 || true

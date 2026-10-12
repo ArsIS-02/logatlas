@@ -36,10 +36,16 @@ function logatlas_check() {
     return true;
 }
     ]]></script>
+    <!-- Выбор устанавливаемого описан так, как его составляет сам productbuild: внешний пункт
+         и вложенный невидимый, который и ссылается на пакет. Если ссылку на пакет положить прямо
+         в верхний пункт, установщик ничего не ставит и при этом рапортует об успехе. -->
     <choices-outline>
-        <line choice="default"/>
+        <line choice="default">
+            <line choice="io.github.arsis-02.logatlas"/>
+        </line>
     </choices-outline>
-    <choice id="default" title="LogAtlas">
+    <choice id="default"/>
+    <choice id="io.github.arsis-02.logatlas" visible="false">
         <pkg-ref id="io.github.arsis-02.logatlas"/>
     </choice>
     <pkg-ref id="io.github.arsis-02.logatlas" version="@VERSION@" onConclusion="none">LogAtlas-component.pkg</pkg-ref>
