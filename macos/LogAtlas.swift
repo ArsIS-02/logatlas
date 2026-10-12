@@ -421,6 +421,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         let fileItem = NSMenuItem()
         let fileMenu = NSMenu(title: "Файл")
         fileMenu.addItem(withTitle: "Главная", action: #selector(goHome), keyEquivalent: "1")
+        fileMenu.addItem(withTitle: "Собрать журналы этого Mac…", action: #selector(collectHere), keyEquivalent: "")
+        fileMenu.addItem(.separator())
         fileMenu.addItem(withTitle: "Открыть в браузере", action: #selector(openInBrowser), keyEquivalent: "")
         fileMenu.addItem(withTitle: "Папка данных", action: #selector(openDataDir), keyEquivalent: "")
         fileMenu.addItem(withTitle: "Журнал программы", action: #selector(openLog), keyEquivalent: "")
@@ -487,6 +489,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
 
     @objc func goHome() {
         if let u = baseURL { web.load(URLRequest(url: u)) }
+    }
+
+    @objc func collectHere() {
+        web.evaluateJavaScript("window.laCommand && window.laCommand('collect-here')", completionHandler: nil)
     }
 
     @objc func openInBrowser() {

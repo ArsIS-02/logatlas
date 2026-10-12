@@ -21,12 +21,12 @@ from starlette.responses import FileResponse, JSONResponse, Response, StreamingR
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from . import analytics, collect, db, detections, ingest, winlocal
+from . import analytics, collect, compare, db, detections, ingest, maclocal, sigma, winlocal
 from .parsers import SUPPORTED
 from .parsers.base import CATEGORIES
 from .timeutil import fmt_tz, ms_to_str
 
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 STATIC = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
 log = logging.getLogger("logatlas")
 
@@ -115,8 +115,14 @@ async def index(req):
 def meta(req):
     return J({"version": VERSION, "categories": CATEGORIES, "supported": SUPPORTED,
               "rules": list(detections.ALL.values()), "inbox": db.INBOX_DIR, "runtime": RUNTIME,
-              "log_hint": LOG_HINT, "local_collect": winlocal.ENABLED,
-              "host": (os.environ.get("COMPUTERNAME") or "") if winlocal.ENABLED else ""})
+              "log_hint": LOG_HINT, "local_collect": _local_kind(),
+              "host": (os.environ.get("COMPUTERNAME") or "") if winlocal.ENABLED
+              else maclocal.host() if maclocal.ENABLED else ""})
+
+
+def _local_kind():
+    """Сбор журналов этого компьютера из приложения: windows, macos или выключен."""
+    return "windows" if winlocal.ENABLED else "macos" if maclocal.ENABLED else False
 
 
 def list_cases(req):
@@ -213,6 +219,7 @@ def delete_case(req):
     for suffix in ("", "-wal", "-shm"):
         _remove(db.case_path(cid) + suffix)
     shutil.rmtree(os.path.join(db.UPLOADS_DIR, cid), ignore_errors=True)
+    compare.clear_baseline(cid)
     return J({"ok": True})
 
 
@@ -564,24 +571,136 @@ async def collect_start(req: Request):
     return J({"id": cid})
 
 
+# ---------------------------------------------------------------------------
+# сравнение сборов и эталон хоста
+async def compare_cases(req: Request):
+    a, b = req.query_params.get("a", ""), req.query_params.get("b", "")
+    if not a or not b or a == b:
+        return _err("Выберите два разных сбора")
+    try:
+        return J(await run_in_threadpool(compare.compare, a, b))
+    except KeyError:
+        return _err("Сбор не найден", 404)
+    except ValueError as e:
+        return _err(str(e))
+
+
+def compare_candidates(req):
+    try:
+        return J(compare.candidates(req.path_params["cid"]))
+    except KeyError:
+        return _err("Сбор не найден", 404)
+
+
+async def baseline_get(req: Request):
+    try:
+        return J(await run_in_threadpool(compare.baseline_status, req.path_params["cid"],
+                                         req.query_params.get("diff", "1") != "0"))
+    except KeyError:
+        return _err("Сбор не найден", 404)
+
+
+def baseline_set(req):
+    try:
+        compare.set_baseline(req.path_params["cid"])
+        return J(compare.baseline_status(req.path_params["cid"], with_diff=False))
+    except KeyError:
+        return _err("Сбор не найден", 404)
+    except ValueError as e:
+        return _err(str(e))
+
+
+def baseline_clear(req):
+    compare.clear_baseline(req.path_params["cid"])
+    return J({"ok": True})
+
+
+# ---------------------------------------------------------------------------
+# правила Sigma
+def sigma_list(req):
+    rules = sigma.list_rules()
+    return J({"rules": rules, "apply": sigma.APPLY, "yaml": sigma.yaml is not None,
+              "counts": {"total": len(rules), "enabled": sum(1 for r in rules if r["enabled"] and not r["error"]),
+                         "unsupported": sum(1 for r in rules if r["error"])}})
+
+
+async def sigma_import(req: Request):
+    form = await req.form(max_files=2000, max_fields=20)
+    files = []
+    for f in form.getlist("files"):
+        if not hasattr(f, "filename") or not f.filename:
+            continue
+        data = await f.read()
+        await f.close()
+        if len(data) > 200 << 20:
+            return _err(f"{f.filename}: файл больше 200 МБ")
+        files.append((f.filename, data))
+    if not files:
+        return _err("Выберите файлы правил .yml или архив .zip")
+    try:
+        rep = await run_in_threadpool(sigma.import_files, files)
+    except RuntimeError as e:
+        return _err(str(e))
+    return J(rep)
+
+
+def sigma_get(req):
+    r = sigma.get_rule(req.path_params["rid"])
+    return J(r) if r else _err("Правило не найдено", 404)
+
+
+async def sigma_patch(req: Request):
+    body = await req.json()
+    ids = [str(x) for x in body.get("ids") or []]
+    return J({"n": sigma.set_enabled(ids, bool(body.get("enabled")))})
+
+
+async def sigma_delete(req: Request):
+    body = await req.json()
+    ids = [str(x) for x in body.get("ids") or []]
+    return J({"n": sigma.delete(ids)})
+
+
+async def sigma_apply(req: Request):
+    try:
+        body = await req.json()
+    except ValueError:
+        body = {}
+    try:
+        return J(sigma.start_apply((body or {}).get("case_id")))
+    except RuntimeError as e:
+        return _err(str(e))
+
+
+def sigma_apply_status(req):
+    return J(sigma.APPLY)
+
+
 def _is_local(req: Request) -> bool:
     return (req.client.host if req.client else "") in ("127.0.0.1", "::1")
 
 
 async def local_collect(req: Request):
-    if not winlocal.ENABLED:
-        return _err("Доступно только в приложении LogAtlas для Windows", 404)
+    if not winlocal.ENABLED and not maclocal.ENABLED:
+        return _err("Доступно только в приложении LogAtlas для Windows и macOS", 404)
     if not _is_local(req):
         return _err("Сбор журналов этого компьютера запускается только с него самого", 403)
     try:
-        jid = await run_in_threadpool(winlocal.start, _base(req))
+        if winlocal.ENABLED:
+            jid = await run_in_threadpool(winlocal.start, _base(req))
+        else:
+            try:
+                body = await req.json()
+            except ValueError:
+                body = {}
+            jid = maclocal.start((body or {}).get("days", 3))
     except RuntimeError as e:
         return _err(str(e))
     return J({"id": jid})
 
 
 def local_collect_status(req):
-    j = winlocal.status(req.path_params["jid"])
+    j = winlocal.status(req.path_params["jid"]) or maclocal.status(req.path_params["jid"])
     return J(j) if j else _err("Задание не найдено", 404)
 
 
@@ -591,7 +710,8 @@ def status(req):
     cur = w.current if w else None
     queued = w.q.qsize() if w else 0
     collecting = sum(1 for p in list(collect.JOBS.values()) if p.poll() is None)
-    local = sum(1 for j in list(winlocal.JOBS.values()) if j["state"] in ("starting", "waiting", "collecting"))
+    local = sum(1 for j in list(winlocal.JOBS.values()) + list(maclocal.JOBS.values())
+                if j["state"] in ("starting", "waiting", "collecting"))
     case = (db.get_case(cur) or {}).get("name", "") if cur else ""
     return J({"busy": bool(cur or queued or collecting or local), "case": case, "queued": queued,
               "collecting": collecting, "local": local})
@@ -627,6 +747,18 @@ routes = [
     Route("/api/cases/{cid}/events/{eid:int}", get_event),
     Route("/api/cases/{cid}/events/{eid:int}/context", get_context),
     Route("/api/cases/{cid}/ioc", ioc, methods=["POST"]),
+    Route("/api/sigma", sigma_list, methods=["GET"]),
+    Route("/api/sigma", sigma_import, methods=["POST"]),
+    Route("/api/sigma", sigma_patch, methods=["PATCH"]),
+    Route("/api/sigma", sigma_delete, methods=["DELETE"]),
+    Route("/api/sigma/apply", sigma_apply, methods=["POST"]),
+    Route("/api/sigma/apply", sigma_apply_status, methods=["GET"]),
+    Route("/api/sigma/rules/{rid}", sigma_get),
+    Route("/api/compare", compare_cases),
+    Route("/api/cases/{cid}/compare-candidates", compare_candidates),
+    Route("/api/cases/{cid}/baseline", baseline_get, methods=["GET"]),
+    Route("/api/cases/{cid}/baseline", baseline_set, methods=["PUT"]),
+    Route("/api/cases/{cid}/baseline", baseline_clear, methods=["DELETE"]),
     Route("/api/inbox", inbox),
     Route("/api/inbox/import", inbox_import, methods=["POST"]),
     Route("/api/local/collect", local_collect, methods=["POST"]),
@@ -671,8 +803,12 @@ def _warm_overviews():
 def create_app():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     db.init()
+    compare.init()
+    sigma.init()
     if winlocal.ENABLED:
         winlocal.cleanup()
+    if maclocal.ENABLED:
+        maclocal.cleanup()
     ingest.worker()
     threading.Thread(target=_warm_overviews, daemon=True, name="overview-warm").start()
     try:

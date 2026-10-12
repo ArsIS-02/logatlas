@@ -13,7 +13,7 @@ export async function renderFindings(view, ctx) {
         ${list.length ? list.map((f) => h`<details class="finding" data-rule="${f.id}" ${ctx.sub === f.id ? 'open' : ''}>
           <summary>
             ${sevLabel(f.severity)}
-            <div><div class="ft">${f.title}${f.mitre ? h`<span class="mitre" title="MITRE ATT&CK">${f.mitre}</span>` : ''}</div><div class="fd">${f.desc}</div></div>
+            <div><div class="ft">${f.title}${f.mitre ? h`<span class="mitre" title="MITRE ATT&CK">${f.mitre}</span>` : ''}${f.sigma ? h`<span class="mitre sigma-tag" title="Импортированное правило Sigma">Sigma</span>` : ''}</div><div class="fd">${f.desc}</div></div>
             <div class="fm"><b class="num">${fmtN(f.n)}</b>${fmtTime(f.first, 'short')} — ${fmtTime(f.last, 'short')}</div>
           </summary>
           <div class="fbody"><div class="loading"><span class="spinner"></span></div></div>

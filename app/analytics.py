@@ -306,7 +306,7 @@ def findings_summary(con, t0=None, t1=None):
         f"FROM findings f JOIN events e ON e.id = f.event_id WHERE {w} GROUP BY f.rule", p).fetchall()
     out = []
     for r in rows:
-        meta = detections.ALL.get(r["rule"], {"id": r["rule"], "severity": "info", "title": r["rule"], "desc": ""})
+        meta = detections.meta(r["rule"])
         out.append({**meta, "n": r["n"], "first": r["first"], "last": r["last"], "groups": r["groups"]})
     out.sort(key=lambda x: (detections.SEV_ORDER.get(x["severity"], 9), -x["n"]))
     return out
@@ -322,7 +322,7 @@ def finding_detail(con, rule, t0=None, t1=None, limit=200):
         f"SELECT e.id, e.t, e.source, e.process, e.user, e.level, e.category, e.action, e.subject, "
         f"substr(e.message, 1, 400) AS message FROM findings f JOIN events e ON e.id=f.event_id "
         f"WHERE f.rule=? AND {w} ORDER BY e.t DESC LIMIT ?", [rule] + p + [limit])]
-    return {"rule": detections.ALL.get(rule, {"id": rule}), "groups": groups, "events": events}
+    return {"rule": detections.meta(rule), "groups": groups, "events": events}
 
 
 # ---------------------------------------------------------------------------
@@ -388,7 +388,7 @@ def event(con, eid):
     if not r:
         return None
     d = dict(r)
-    d["rules"] = [detections.ALL.get(x[0], {"id": x[0]}) for x in
+    d["rules"] = [detections.meta(x[0]) for x in
                   con.execute("SELECT rule FROM findings WHERE event_id=?", (eid,))]
     return d
 

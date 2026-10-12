@@ -21,7 +21,7 @@ import zipfile
 from collections import Counter
 from datetime import datetime, timedelta
 
-from . import analytics, db, detections
+from . import analytics, db, detections, sigma
 from .parsers import choose
 from .parsers.base import Ctx, Source
 
@@ -764,8 +764,21 @@ def run_ingest(case_id, paths, tz_default, tz_mode):
                 c.execute("UPDATE files SET t_min=?, t_max=? WHERE id=?", (a, b, fid))
         db.set_case(case_id, progress=0.92, stage="Индексы")
         con.executescript(db.CASE_INDEXES)
+        with db.catalog() as c:
+            plats = c.execute("SELECT platform, sum(events) FROM files WHERE case_id=? AND platform IS NOT NULL "
+                              "AND platform!='any' GROUP BY platform ORDER BY 2 DESC", (case_id,)).fetchall()
+        platform = plats[0][0] if plats else (case or {}).get("platform") or "other"
+        if len(plats) > 1 and plats[1][1] > 0.2 * plats[0][1]:
+            platform = "mixed"
         db.set_case(case_id, progress=0.94, stage="Правила обнаружения")
         nf = detections.run(con)
+        try:
+            ns = sigma.run(con, platform)
+            if ns:
+                nf.update(ns)
+                db.add_log(case_id, "info", f"Правила Sigma: сработало {len(ns)}, событий {sum(ns.values())}")
+        except Exception:  # noqa: BLE001  ошибка в правилах Sigma не должна ломать разбор
+            log.exception("sigma rules failed for case %s", case_id)
         con.execute("PRAGMA analysis_limit=2000")
         con.execute("ANALYZE")
         con.commit()
@@ -776,12 +789,6 @@ def run_ingest(case_id, paths, tz_default, tz_mode):
         log.info("case %s overview in %.1fs", case_id, time.time() - t_ov)
 
         tot = con.execute("SELECT count(*), min(t), max(t) FROM events").fetchone()
-        with db.catalog() as c:
-            plats = c.execute("SELECT platform, sum(events) FROM files WHERE case_id=? AND platform IS NOT NULL "
-                              "AND platform!='any' GROUP BY platform ORDER BY 2 DESC", (case_id,)).fetchall()
-        platform = plats[0][0] if plats else (case or {}).get("platform") or "other"
-        if len(plats) > 1 and plats[1][1] > 0.2 * plats[0][1]:
-            platform = "mixed"
         host = host_votes.most_common(1)[0][0] if host_votes else (case or {}).get("host")
         if case and case.get("host") and not first_load:
             host = case["host"]

@@ -509,3 +509,59 @@ ol.steps span { color: var(--ink); word-break: break-word; }
 .sevbar { align-self: start; }
 
 @media (max-width: 860px) { .plat span { white-space: nowrap; } .platforms { flex-wrap: nowrap; } }
+
+/* эталон хоста (вкладка «Обзор») и сравнение сборов */
+.bl-panel { margin-bottom: 18px; border-left: 3px solid var(--brass); }
+.bl-p { margin: -4px 0 0; font-size: 13px; line-height: 1.5; }
+.bl-kinds { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.bl-kind { display: inline-flex; align-items: baseline; gap: 8px; padding: 6px 12px; border: 1px solid var(--line); border-radius: var(--r-md); color: var(--ink); text-decoration: none; background: var(--panel-2); }
+.bl-kind:hover { border-color: var(--brass); }
+.bl-kind .t { font-size: 12.5px; color: var(--ink-2); }
+.bl-kind .v { font: 600 16px/1 var(--display); color: var(--brass); }
+.bl-kind .m { font-size: 11.5px; color: var(--muted); }
+.cmp-head { margin-bottom: 18px; }
+.cmp-pick { display: flex; flex-wrap: wrap; gap: 12px 18px; align-items: flex-end; justify-content: space-between; }
+.cmp-pick label.lbl { flex: 1 1 420px; }
+.cmp-pick select.field { width: 100%; max-width: 760px; }
+.cmp-note { margin: 12px 0 0; font-size: 12.5px; line-height: 1.5; }
+.cmp-sum { display: flex; flex-wrap: wrap; gap: 8px 34px; margin-bottom: 14px; }
+.cmp-sum div { display: flex; align-items: baseline; gap: 8px; }
+.cmp-sum b { font: 600 28px/1 var(--display); }
+.cmp-sum div:first-child b { color: var(--brass); }
+.cmp-sum span { color: var(--muted); font-size: 13px; }
+.cmp-kinds { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 8px; }
+.cmp-kind { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r-md); color: var(--ink); text-decoration: none; background: var(--panel-2); }
+.cmp-kind:hover { border-color: var(--line-2); }
+.cmp-kind.hot { border-color: var(--brass); }
+.cmp-kind .t { font-size: 12.5px; color: var(--ink-2); }
+.cmp-kind .row { display: flex; gap: 10px; align-items: baseline; }
+.cmp-kind .n { font: 600 18px/1 var(--display); }
+.cmp-kind.hot .n { color: var(--brass); }
+.cmp-kind .m { font-size: 12.5px; color: var(--s-medium); }
+.cmp-kind .g { font-size: 12.5px; color: var(--muted); }
+.cmp-kind .c { font-size: 11.5px; }
+.cmp-sec { margin-top: 18px; scroll-margin-top: 16px; }
+.cmp-h { font: 600 13.5px/1.3 var(--font); margin: 16px 0 8px; }
+.cmp-h:first-of-type { margin-top: 4px; }
+.cmp-h .muted { font-weight: 400; font-size: 12.5px; }
+.cmp-h.new .num { color: var(--brass); }
+.cmp-h.more .num { color: var(--s-medium); }
+
+/* «Этот Mac» на главной */
+.local-box { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: flex-end; margin-top: 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--panel-2); font-size: 13px; }
+.local-box .spinner { vertical-align: middle; }
+.local-hint { flex: 1 1 260px; font-size: 12.5px; line-height: 1.45; }
+
+/* правила Sigma */
+.drop.small-drop { display: block; padding: 16px 18px; margin: 0; }
+.sigma-tag { color: var(--brass); border-color: var(--brass); }
+.sg-tools { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.sg-bulk { margin-bottom: 8px; }
+.sg-src { font-size: 11.5px; word-break: break-all; }
+.sg-bad { font-size: 12px; color: var(--muted); }
+.sg-sw { display: inline-flex; gap: 6px; align-items: center; font-size: 12.5px; color: var(--ink-2); cursor: pointer; white-space: nowrap; }
+.sg-yaml td { background: var(--panel-2); }
+.sg-yaml pre { margin: 0; max-height: 420px; overflow: auto; font: 12px/1.5 var(--mono); color: var(--ink); white-space: pre-wrap; word-break: break-word; }
+.sg-rep details { margin-top: 6px; }
+.sg-rep ul { margin: 6px 0 0; padding-left: 18px; max-height: 260px; overflow: auto; font-size: 12.5px; }
+.note.err { border-left-color: var(--s-critical); }

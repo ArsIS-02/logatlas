@@ -11,9 +11,11 @@ import { renderSearch } from './views/search.js';
 import { renderFindings } from './views/findings.js';
 import { renderEntities } from './views/entities.js';
 import { renderSources } from './views/sources.js';
+import { renderCompare } from './views/compare.js';
 import { renderReport } from './views/report.js';
 import { renderProgress } from './views/progress.js';
 import { renderHosts, renderCollect } from './views/hosts.js';
+import { renderRules, RULES_ICON } from './views/rules.js';
 import { openEvent, closeDrawer } from './views/event.js';
 
 const TABS = [
@@ -22,6 +24,7 @@ const TABS = [
   ['search', 'Поиск', renderSearch],
   ['findings', 'Находки', renderFindings],
   ['entities', 'Объекты', renderEntities],
+  ['compare', 'Сравнение', renderCompare],
   ['sources', 'Источники', renderSources],
   ['report', 'Отчёт', renderReport],
 ];
@@ -52,6 +55,7 @@ function parseHash() {
   }
   if (parts[0] === 'p' && parts[1]) return { kind: 'home', platform: parts[1] };
   if (parts[0] === 'hosts') return { kind: 'hosts' };
+  if (parts[0] === 'rules') return { kind: 'rules' };
   if (parts[0] === 'collect' && parts[1]) return { kind: 'collect', hostId: parts[1] };
   return { kind: 'home', platform: 'all' };
 }
@@ -103,7 +107,8 @@ function renderSide() {
   const activePlat = kind === 'home' ? S.route.platform : kind === 'case' ? (S.case?.platform || 'all') : null;
   mount($('#platforms'), h`${Object.entries(PLATFORMS).map(([k, p]) => h`
     <a class="plat ${activePlat === k ? 'on' : ''}" href="#/p/${k}">${raw(platIcon(k))}<span>${p.name}</span><span class="cnt">${counts[k] || ''}</span></a>`)}
-    <a class="plat plat-hosts ${kind === 'hosts' || kind === 'collect' ? 'on' : ''}" href="#/hosts">${raw(HOSTS_ICON)}<span>Хосты и сбор</span></a>`);
+    <a class="plat plat-hosts ${kind === 'hosts' || kind === 'collect' ? 'on' : ''}" href="#/hosts">${raw(HOSTS_ICON)}<span>Хосты и сбор</span></a>
+    <a class="plat ${kind === 'rules' ? 'on' : ''}" href="#/rules">${RULES_ICON}<span>Правила Sigma</span></a>`);
   const listPlat = activePlat || 'all';
   const list = S.cases.filter((c) => listPlat === 'all' || c.platform === listPlat || ['mixed', 'other', null].includes(c.platform));
   mount($('#side-cases'), h`
@@ -175,6 +180,12 @@ async function loadCase(id, force = false) {
 function renderTop() {
   const top = $('#top');
   const r = S.route;
+  if (r.kind === 'rules') {
+    mount(top, h`<div class="top-row"><div class="top-title"><h1>Правила Sigma</h1>
+      <div class="chips"><span class="chip">импорт правил SigmaHQ и своих</span></div></div></div>`);
+    S.ribbonApi = null;
+    return;
+  }
   if (r.kind === 'hosts' || r.kind === 'collect') {
     mount(top, h`<div class="top-row"><div class="top-title"><h1>${r.kind === 'hosts' ? 'Хосты и сбор журналов' : 'Новый сбор с хоста'}</h1>
       <div class="chips"><span class="chip">по SSH, ключом панели</span></div></div></div>`);
@@ -293,6 +304,14 @@ async function route() {
     await renderHome(view, { platform: r.platform, cases: S.cases, meta: S.meta, reload: loadCases, refresh: async () => { await loadCases(); route(); } });
     return;
   }
+  if (r.kind === 'rules') {
+    S.case = null;
+    S.full = null;
+    renderSide();
+    renderTop();
+    await renderRules(view);
+    return;
+  }
   if (r.kind === 'hosts' || r.kind === 'collect') {
     S.case = null;
     S.full = null;
@@ -379,6 +398,13 @@ async function boot() {
   $('#theme-btn').addEventListener('click', theme);
   $('#side-cases').addEventListener('click', onSideClick);
   window.addEventListener('la:cases-changed', () => loadCases());
+  // команды из меню окна LogAtlas (LogAtlas.exe, LogAtlas.app)
+  window.laCommand = (cmd) => {
+    if (cmd !== 'collect-here') return;
+    const onHome = S.route.kind === 'home';
+    if (!onHome) window.location.hash = '#/';
+    setTimeout(() => { const b = document.getElementById('local-collect'); if (b) b.click(); }, onHome ? 0 : 700);
+  };
   try {
     S.meta = await api.get('/api/meta');
     $('#ver').textContent = `v${S.meta.version}`;

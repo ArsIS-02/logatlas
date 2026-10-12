@@ -144,25 +144,30 @@ def _watch(jid: str, out_dir: str, handle, on_done):
         shutil.rmtree(out_dir, ignore_errors=True)
 
 
-def _import(path: str) -> str:
+def import_archive(path: str, platform: str = "windows", host: str | None = None, how: str = "окном сборщика") -> str:
+    """Поставить архив журналов этого компьютера на разбор как новый сбор (общий для Windows и macOS)."""
     cid = uuid.uuid4().hex[:10]
     updir = os.path.join(db.UPLOADS_DIR, cid)
     os.makedirs(updir, exist_ok=True)
     dst = os.path.join(updir, f"{int(time.time() * 1000)}_{os.path.basename(path)}")
     shutil.move(path, dst)
-    host = os.environ.get("COMPUTERNAME", "")
+    if host is None:
+        host = os.environ.get("COMPUTERNAME", "")
     stamp = time.strftime("%d.%m.%Y %H:%M")
     name = f"{host} — этот компьютер, {stamp}" if host else f"Этот компьютер, {stamp}"
     now = time.time()
     with db.catalog() as c:
         c.execute("INSERT INTO cases(id,name,platform,host,tz,tz_mode,created,updated,status,progress,stage) "
                   "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                  (cid, name, "windows", host or "этот компьютер", 0, "auto",
+                  (cid, name, platform, host or "этот компьютер", 0, "auto",
                    now, now, "queued", 0, "В очереди"))
-    db.add_log(cid, "info", f"Журналы этого компьютера собраны окном сборщика: {os.path.basename(path)}, "
+    db.add_log(cid, "info", f"Журналы этого компьютера собраны {how}: {os.path.basename(path)}, "
                             f"{collect._human(os.path.getsize(dst))}")
     ingest.worker().submit(cid, [dst], 0, "auto")
     return cid
+
+
+_import = import_archive
 
 
 def start(url: str, on_done=None) -> str:

@@ -116,7 +116,7 @@ step 'проверка модулей'
   cd /tmp
   LOGATLAS_DATA="$BUILD/check-data" PYTHONDONTWRITEBYTECODE=1 "$PY" -c "
 import sys; sys.path.insert(0, '$L')
-import app.main, starlette, uvicorn, multipart, importlib.util as u
+import app.main, starlette, uvicorn, multipart, yaml, importlib.util as u
 assert u.find_spec('evtx') or u.find_spec('Evtx'), 'evtx'
 print('modules ok, LogAtlas', app.main.VERSION, 'orjson' if u.find_spec('orjson') else 'json')"
 )

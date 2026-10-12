@@ -43,7 +43,7 @@ say ""
 # ------------------------------------------------------------------ адрес LogAtlas
 if [ -z "$URL" ]; then
   def="$(conf_get url)"; def="${def:-${LOGATLAS_URL:-}}"
-  a="$(ask "Адрес LogAtlas${def:+ [$def]}${def:- (например http://192.168.1.10:8484)}, «-» — не отправлять: ")"
+  a="$(ask "Адрес LogAtlas${def:+ [$def]}${def:- (например http://192.168.10.10:8484)}, «-» — не отправлять: ")"
   if [ "$a" = - ]; then URL=''; elif [ -n "$a" ]; then URL="$a"; else URL="$def"; fi
 fi
 if [ -n "$URL" ]; then

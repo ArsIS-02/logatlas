@@ -70,7 +70,7 @@ function Save-Cfg {
 # ------------------------------------------------------------------ адрес LogAtlas
 if (-not $Url) {
   $def = $cfg.Url
-  $hint = if ($def) { " [$def]" } else { ' (например http://192.168.1.10:8484)' }
+  $hint = if ($def) { " [$def]" } else { ' (например http://192.168.10.10:8484)' }
   $a = Ask "Адрес LogAtlas$hint, «-» — не отправлять: "
   if ($a -eq '-') { $Url = '' } elseif ($a) { $Url = $a } else { $Url = $def }
 }

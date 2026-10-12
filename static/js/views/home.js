@@ -51,13 +51,14 @@ export async function renderHome(view, { platform, cases, meta, refresh }) {
           <input id="files" type="file" multiple class="hidden">
           <label class="btn" for="folder">Выбрать папку</label>
           <a class="btn" href="#/hosts">Собрать с хоста…</a>
-          ${meta?.local_collect ? h`<button class="btn" type="button" id="local-collect" title="Выгрузить журналы событий этого компьютера и сразу разобрать их (нужны права администратора)">Этот компьютер${meta.host ? ` (${meta.host})` : ''}…</button>` : ''}
+          ${meta?.local_collect ? h`<button class="btn" type="button" id="local-collect" title="Выгрузить журналы этого компьютера и сразу разобрать их (нужны права администратора)">${meta.local_collect === 'macos' ? 'Этот Mac' : 'Этот компьютер'}${meta.host ? ` (${meta.host})` : ''}…</button>` : ''}
           <input id="folder" type="file" webkitdirectory multiple class="hidden">
           <label class="lbl">Название сбора<input class="field" id="cname" placeholder="например, mbp-design-07, 9 октября" style="width:260px"></label>
           <label class="lbl">Часовой пояс хоста
             <select class="field" id="tzmode"><option value="auto">Определить по журналам</option><option value="fixed">Указать вручную</option></select></label>
           <label class="lbl hidden" id="tzwrap">Пояс<select class="field" id="tz">${raw(tzOptions())}</select></label>
         </div>
+        <div id="local-box" class="local-box hidden"></div>
         <div id="picked" class="hidden" style="margin-top:14px"></div>
       </div>
     </form>
@@ -189,33 +190,55 @@ export async function renderHome(view, { platform, cases, meta, refresh }) {
     }
   }
 
-  // Журналы этого компьютера (LogAtlas для Windows)
+  // Журналы этого компьютера (LogAtlas для Windows: окно сборщика; для macOS: период и пароль администратора)
   const lc = $('#local-collect');
-  if (lc) {
-    lc.addEventListener('click', async () => {
-      lc.disabled = true;
-      let job;
-      try {
-        job = await api.post('/api/local/collect', {});
-      } catch (e) {
-        lc.disabled = false;
-        toast(e.message);
-        return;
+  const box = $('#local-box');
+  const watch = (job) => {
+    const timer = setInterval(async () => {
+      let j;
+      try { j = await api.get(`/api/local/collect/${job.id}`); } catch (e) { return; }
+      if (j.stage && document.body.contains(box)) mount(box, h`<span class="spinner"></span> ${j.stage}`);
+      if (j.state === 'done') {
+        clearInterval(timer);
+        window.dispatchEvent(new Event('la:cases-changed'));
+        window.location.hash = `#/c/${j.case}/overview`;
+      } else if (j.state === 'closed' || j.state === 'error') {
+        clearInterval(timer);
+        if (document.body.contains(lc)) lc.disabled = false;
+        if (document.body.contains(box)) box.classList.add('hidden');
+        toast(j.error || 'Сбор не выполнен');
       }
+    }, meta.local_collect === 'macos' ? 1000 : 2000);
+  };
+  const startLocal = async (body) => {
+    lc.disabled = true;
+    let job;
+    try {
+      job = await api.post('/api/local/collect', body);
+    } catch (e) {
+      lc.disabled = false;
+      box.classList.add('hidden');
+      toast(e.message);
+      return;
+    }
+    if (meta.local_collect === 'macos') {
+      box.classList.remove('hidden');
+      mount(box, h`<span class="spinner"></span> Подтвердите права администратора в окне macOS…`);
+    } else {
       toast('Открыто окно сборщика: выберите период и нажмите «Собрать». Архив разберётся сам.');
-      const timer = setInterval(async () => {
-        let j;
-        try { j = await api.get(`/api/local/collect/${job.id}`); } catch (e) { return; }
-        if (j.state === 'done') {
-          clearInterval(timer);
-          window.dispatchEvent(new Event('la:cases-changed'));
-          window.location.hash = `#/c/${j.case}/overview`;
-        } else if (j.state === 'closed' || j.state === 'error') {
-          clearInterval(timer);
-          if (document.body.contains(lc)) lc.disabled = false;
-          toast(j.error || 'Сбор не выполнен');
-        }
-      }, 2000);
+    }
+    watch(job);
+  };
+  if (lc) {
+    lc.addEventListener('click', () => {
+      if (meta.local_collect !== 'macos') { startLocal({}); return; }
+      box.classList.toggle('hidden');
+      mount(box, h`<label class="lbl">Период<select class="field" id="local-days">
+          <option value="1">последние сутки</option><option value="3" selected>3 дня</option><option value="7">неделя</option>
+          <option value="14">2 недели</option><option value="30">30 дней</option></select></label>
+        <button class="btn primary" type="button" id="local-go">Собрать и разобрать</button>
+        <span class="muted local-hint">Unified log без самых шумных подсистем, питание и установки. macOS спросит пароль администратора — LogAtlas его не видит.</span>`);
+      $('#local-go').addEventListener('click', () => startLocal({ days: +$('#local-days').value }));
     });
   }
 

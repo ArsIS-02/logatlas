@@ -3,7 +3,7 @@ rem LogAtlas: collect Windows event logs with a progress window. Just double-cli
 rem Windows asks for administrator rights: they are needed to read the Security log.
 rem The script only reads logs: nothing is changed and nothing is sent anywhere.
 rem
-rem LogAtlas address for the "Open" button (optional), e.g. http://192.168.1.10:8484
+rem LogAtlas address for the "Open" button (optional), e.g. http://192.168.10.10:8484
 set "LOGATLAS_URL="
 rem
 rem Troubleshooting: run "collect-windows-gui.cmd debug" from a console to keep the PowerShell window visible.
@@ -558,7 +558,7 @@ $btnMain.Add_Click({
 })
 $btnOpen.Add_Click({
   $u = $txtUrl.Text.Trim()
-  if (-not $u) { Show-Msg 'Введите адрес LogAtlas, например http://192.168.1.10:8484'; return }
+  if (-not $u) { Show-Msg 'Введите адрес LogAtlas, например http://192.168.10.10:8484'; return }
   if ($u -notmatch '^[a-zA-Z][a-zA-Z0-9+.-]*://') { $u = 'http://' + $u; $txtUrl.Text = $u }
   $cfg.Url = $u
   Save-Cfg

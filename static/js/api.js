@@ -24,7 +24,7 @@ export const api = {
   post: (p, body) => req('POST', p, body),
   patch: (p, body) => req('PATCH', p, body),
   put: (p, body) => req('PUT', p, body),
-  del: (p) => req('DELETE', p),
+  del: (p, body) => req('DELETE', p, body),
   /** загрузка с прогрессом */
   upload(form, onProgress) {
     return new Promise((resolve, reject) => {

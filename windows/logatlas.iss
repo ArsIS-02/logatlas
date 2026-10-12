@@ -4,7 +4,7 @@
 ; app\, static\, scripts\, service\ (WinSW + service.ps1), install-service.cmd, uninstall-service.cmd.
 
 #ifndef AppVer
-  #define AppVer "1.4.0"
+  #define AppVer "1.5.0"
 #endif
 #ifndef Arch
   #define Arch "x64"

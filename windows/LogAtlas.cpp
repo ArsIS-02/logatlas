@@ -46,7 +46,7 @@ using Microsoft::WRL::ComPtr;
 
 enum Mode { MODE_NONE = 0, MODE_APP = 1, MODE_SERVICE = 2, MODE_EXISTING = 3 };
 // пункты системного меню (щелчок по значку в заголовке, Alt+Пробел): младшие 4 бита — нули, меньше 0xF000
-enum { IDM_BROWSER = 0x1010, IDM_DATA = 0x1020, IDM_LOG = 0x1030, IDM_ABOUT = 0x1040 };
+enum { IDM_BROWSER = 0x1010, IDM_DATA = 0x1020, IDM_LOG = 0x1030, IDM_ABOUT = 0x1040, IDM_COLLECT = 0x1050 };
 
 static HINSTANCE g_inst;
 static HWND g_wnd;
@@ -525,6 +525,12 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case IDM_DATA: OpenExternal(g_data); return 0;
         case IDM_LOG: OpenExternal(g_data + L"\\logatlas.log"); return 0;
         case IDM_ABOUT: About(); return 0;
+        case IDM_COLLECT:
+            if (g_view)
+                g_view->ExecuteScript(L"window.laCommand && window.laCommand('collect-here')",
+                                      Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
+                                          [](HRESULT, LPCWSTR) -> HRESULT { return S_OK; }).Get());
+            return 0;
         }
         break;
     case WM_APP_READY:
@@ -652,6 +658,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR cmdLine, int nShow) {
 
     HMENU sm = GetSystemMenu(g_wnd, FALSE);
     AppendMenuW(sm, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(sm, MF_STRING, IDM_COLLECT, L"Собрать журналы этого компьютера…");
     AppendMenuW(sm, MF_STRING, IDM_BROWSER, L"Открыть в браузере");
     AppendMenuW(sm, MF_STRING, IDM_DATA, L"Папка данных");
     AppendMenuW(sm, MF_STRING, IDM_LOG, L"Журнал программы");

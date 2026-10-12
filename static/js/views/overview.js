@@ -1,5 +1,6 @@
 // Обзор сбора: сводка, активность по категориям, тепловая карта, находки, потоки событий
 import { api } from '../api.js';
+import { baselinePanel } from './compare.js';
 import { hbars, heatmap, sankey, stacked } from '../charts.js';
 import {
   $, $$, CATS, CAT_KEYS, SEV, SEV_KEYS, catColor, fmtBucket, fmtN, fmtSpan, fmtTime, h, mount, plural, raw, sevIcon, sevLabel, store,
@@ -40,6 +41,8 @@ export async function renderOverview(view, ctx) {
       </div>
     </section>
 
+    <section class="panel bl-panel" id="baseline-panel" hidden></section>
+
     <section class="panel">
       <div class="panel-h"><h2>Активность по категориям</h2><span class="sub">Столбец — ${fmtBucket(d.bucket)}. Выделите участок, чтобы приблизить.</span></div>
       <div class="chart" id="stk"></div>
@@ -72,6 +75,8 @@ export async function renderOverview(view, ctx) {
       <section class="panel"><div class="panel-h"><h2>Источники</h2></div><div id="srcs"></div></section>
     </div>
   `);
+
+  baselinePanel($('#baseline-panel'), ctx);
 
   // столбцы по категориям
   const hidden = new Set(store('la-hidden-cats') || []);

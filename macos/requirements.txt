@@ -4,3 +4,4 @@ uvicorn>=0.30,<1
 python-multipart>=0.0.9
 orjson>=3.10
 evtx
+PyYAML>=6.0

@@ -133,8 +133,17 @@ def _susp_sql():
     return " OR ".join(parts)
 
 
+def meta(rule_id: str) -> dict:
+    """Сведения о правиле: встроенное или импортированное правило Sigma."""
+    m = ALL.get(rule_id)
+    if m is None and rule_id.startswith("sigma:"):
+        from . import sigma
+        m = sigma.meta(rule_id)
+    return m or {"id": rule_id, "severity": "info", "title": rule_id, "desc": ""}
+
+
 def run(con) -> dict:
-    con.execute("DELETE FROM findings")
+    con.execute("DELETE FROM findings WHERE rule NOT LIKE 'sigma:%'")
     susp = _susp_sql()
     for rid, sev, title, desc, where, mitre in RULES:
         w = where.replace("{susp}", susp)
@@ -176,6 +185,6 @@ def run(con) -> dict:
                             "SELECT 'log_gap', id, source FROM events WHERE source=? ORDER BY t DESC LIMIT 1", (src,))
     con.commit()
     out = {}
-    for rid, n in con.execute("SELECT rule, count(*) FROM findings GROUP BY rule"):
+    for rid, n in con.execute("SELECT rule, count(*) FROM findings WHERE rule NOT LIKE 'sigma:%' GROUP BY rule"):
         out[rid] = n
     return out

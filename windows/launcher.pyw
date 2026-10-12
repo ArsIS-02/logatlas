@@ -317,7 +317,7 @@ def prepare_env(ddir: str, mode: str, settings: dict):
     else:
         os.environ["LOGATLAS_RUNTIME"] = {"service": "windows-service"}.get(
             mode, "windows-portable" if portable() else "windows-app")
-    if mode != "service" and WINDOWS:
+    if mode != "service":             # приложение: кнопка «Этот компьютер» / «Этот Mac»
         os.environ["LOGATLAS_DESKTOP"] = "1"
     if settings.get("workers"):
         os.environ["LOGATLAS_WORKERS"] = str(settings["workers"])

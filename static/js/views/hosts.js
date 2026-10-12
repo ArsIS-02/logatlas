@@ -132,7 +132,7 @@ export async function renderHosts(view) {
     form.classList.remove('hidden');
     mount(form, h`<div class="h-form">
       <label class="lbl">Название<input class="field" id="hf-name" value="${v.name}" placeholder="redos-pc"></label>
-      <label class="lbl">Адрес (имя или IP)<input class="field" id="hf-addr" value="${v.address}" placeholder="192.168.1.20" required></label>
+      <label class="lbl">Адрес (имя или IP)<input class="field" id="hf-addr" value="${v.address}" placeholder="192.168.10.20" required></label>
       <label class="lbl">Порт SSH<input class="field" id="hf-port" type="number" min="1" max="65535" value="${v.port}" style="width:90px"></label>
       <label class="lbl">Система<select class="field" id="hf-os">${Object.entries(OS_NAME).map(([k, n]) => h`<option value="${k}" ${v.os === k ? raw('selected') : ''}>${n}</option>`)}</select></label>
       <label class="lbl">Пользователь<input class="field" id="hf-user" value="${v.user}" placeholder="${v.os === 'windows' ? 'ваша учётная запись' : info.user}" style="width:170px"></label>
