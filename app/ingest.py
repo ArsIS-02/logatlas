@@ -162,10 +162,42 @@ def source_label(parser, ctx, base):
 # ---------------------------------------------------------------------------
 # Очередь обработки
 # ---------------------------------------------------------------------------
+# Сборы, которые просили удалить прямо во время разбора. Разбор проверяет этот список на переходах
+# между файлами и прекращает работу сам: насильно снять поток Python нельзя, а держать удаление
+# заложником зависшего разбора — хуже всего, иначе такой сбор не убрать уже никогда.
+CANCELLED: set[str] = set()
+_cancel_lock = threading.Lock()
+
+
+class Cancelled(Exception):
+    pass
+
+
+def cancel(case_id: str):
+    with _cancel_lock:
+        CANCELLED.add(case_id)
+
+
+def cancelled(case_id: str) -> bool:
+    with _cancel_lock:
+        return case_id in CANCELLED
+
+
+def _forget(case_id: str):
+    with _cancel_lock:
+        CANCELLED.discard(case_id)
+
+
+def check_cancelled(case_id: str):
+    if cancelled(case_id):
+        raise Cancelled(case_id)
+
+
 class Worker:
     def __init__(self):
         self.q = queue.Queue()
         self.current = None
+        self.started = None
         self.th = threading.Thread(target=self._run, daemon=True, name="ingest")
         self.th.start()
 
@@ -175,15 +207,27 @@ class Worker:
     def _run(self):
         while True:
             job = self.q.get()
-            self.current = job[0]
+            cid = job[0]
+            if cancelled(cid):                     # сбор удалили, пока он ждал очереди
+                _forget(cid)
+                continue
+            self.current = cid
+            self.started = time.time()
             try:
                 run_ingest(*job)
+            except Cancelled:
+                log.info("ingest %s cancelled", cid)
             except Exception as e:  # noqa: BLE001
                 log.exception("ingest failed")
-                db.set_case(job[0], status="error", message=f"{type(e).__name__}: {e}")
-                db.add_log(job[0], "err", f"Разбор не удался: {type(e).__name__}: {e}")
+                if not cancelled(cid):
+                    db.set_case(cid, status="error", message=f"{type(e).__name__}: {e}")
+                    db.add_log(cid, "err", f"Разбор не удался: {type(e).__name__}: {e}")
             finally:
                 self.current = None
+                self.started = None
+                if cancelled(cid):                 # убрать всё, что разбор успел создать
+                    _forget(cid)
+                    db.drop_case_files(cid)
 
 
 WORKER: Worker | None = None
@@ -626,6 +670,7 @@ def _plan_upload(path, job):
 
 def run_ingest(case_id, paths, tz_default, tz_mode):
     t_start = time.time()
+    check_cancelled(case_id)
     case = db.get_case(case_id)
     if not case:
         log.info("case %s was deleted before processing", case_id)
@@ -648,8 +693,10 @@ def run_ingest(case_id, paths, tz_default, tz_mode):
             db.add_log(case_id, "info", f"Разбор идёт параллельно: процессов {job.n}")
         try:
             for path in paths:
+                check_cancelled(case_id)
                 _plan_upload(path, job)
             job.wait_all()
+            check_cancelled(case_id)
             job.collect()
         except BrokenProcessPool:
             # процесс-воркер убит (чаще всего системе не хватило памяти) — начинаем заново в одном процессе
@@ -663,8 +710,10 @@ def run_ingest(case_id, paths, tz_default, tz_mode):
             job = _Job(case_id, tz_default, tmpdir, notes)
             job.total_bytes = sum(os.path.getsize(p) for p in paths) or 1
             for path in paths:
+                check_cancelled(case_id)
                 _plan_upload(path, job)
         job.stop_pool()
+        check_cancelled(case_id)
         t_parse = time.time() - t_start
 
         # --- сводим результаты ---------------------------------------------------

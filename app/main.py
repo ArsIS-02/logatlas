@@ -26,7 +26,7 @@ from .parsers import SUPPORTED
 from .parsers.base import CATEGORIES
 from .timeutil import fmt_tz, ms_to_str
 
-VERSION = "1.8.5"
+VERSION = "1.8.6"
 STATIC = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
 log = logging.getLogger("logatlas")
 
@@ -210,33 +210,20 @@ def delete_case(req):
     c = db.get_case(cid)
     if not c:
         return _err("Сбор не найден", 404)
-    if ingest.WORKER and ingest.WORKER.current == cid:
-        return _err("Сбор сейчас разбирается — удалите после завершения")
+    # Удаление не отказывает никогда, даже если сбор прямо сейчас разбирается: разбор получает отметку
+    # «отменён» и прекращается сам на ближайшем переходе между файлами, а остатки он уберёт за собой.
+    # Иначе зависший разбор делал бы сбор неудаляемым навсегда.
+    busy = bool(ingest.WORKER and ingest.WORKER.current == cid)
+    ingest.cancel(cid)
     collect.cancel(cid)
     with db.catalog() as cat:
         cat.execute("DELETE FROM files WHERE case_id=?", (cid,))
         cat.execute("DELETE FROM cases WHERE id=?", (cid,))
-    for suffix in ("", "-wal", "-shm"):
-        _remove(db.case_path(cid) + suffix)
-    shutil.rmtree(os.path.join(db.UPLOADS_DIR, cid), ignore_errors=True)
     compare.clear_baseline(cid)
-    return J({"ok": True})
-
-
-def _remove(path):
-    """Windows не удаляет открытый файл: соединение с базой сбора могло ещё не закрыться — повторяем."""
-    for i in range(10):
-        try:
-            os.remove(path)
-            return
-        except FileNotFoundError:
-            return
-        except OSError:
-            if os.name != "nt":
-                return
-            import gc
-            gc.collect()
-            time.sleep(0.2 * (i + 1))
+    if not busy:                       # занятый сбор дочистит за собой сам разбор, когда остановится
+        ingest._forget(cid)
+        db.drop_case_files(cid)
+    return J({"ok": True, "busy": busy})
 
 
 def _with_case(fn):
@@ -845,6 +832,9 @@ def _warm_overviews():
 def create_app():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     db.init()
+    stale = db.recover_stale_cases()
+    if stale:
+        logging.getLogger("logatlas").warning("прерванных сборов после перезапуска: %d", len(stale))
     compare.init()
     sigma.init()
     mitre.init()

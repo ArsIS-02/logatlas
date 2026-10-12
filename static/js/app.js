@@ -152,10 +152,10 @@ async function onSideClick(e) {
   const id = b.dataset.id;
   const wasOpen = S.route.kind === 'case' && S.route.id === id;
   try {
-    await api.del(`/api/cases/${id}`);
+    const r = await api.del(`/api/cases/${id}`);
     if (wasOpen) { S.case = null; S.full = null; }
     await loadCases();
-    toast('Сбор удалён');
+    toast(r && r.busy ? 'Сбор удалён, разбор остановлен' : 'Сбор удалён');
     if (wasOpen) window.location.hash = `#/p/${S.route.platform || 'all'}`;
     else if (S.route.kind === 'home') route();
   } catch (err) {

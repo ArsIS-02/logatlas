@@ -134,3 +134,45 @@ def get_case(case_id):
     with catalog() as c:
         r = c.execute("SELECT * FROM cases WHERE id=?", (case_id,)).fetchone()
         return dict(r) if r else None
+
+
+def _remove_file(path):
+    """Windows не удаляет открытый файл: соединение с базой сбора могло ещё не закрыться — повторяем."""
+    import gc
+    for i in range(10):
+        try:
+            os.remove(path)
+            return
+        except FileNotFoundError:
+            return
+        except OSError:
+            if os.name != "nt":
+                return
+            gc.collect()
+            time.sleep(0.2 * (i + 1))
+
+
+def drop_case_files(case_id: str):
+    """Убрать с диска всё, что осталось от сбора: базу сбора и выгруженные файлы."""
+    import shutil
+    for suffix in ("", "-wal", "-shm"):
+        _remove_file(case_path(case_id) + suffix)
+    shutil.rmtree(os.path.join(UPLOADS_DIR, case_id), ignore_errors=True)
+
+
+def recover_stale_cases() -> list[str]:
+    """После перезапуска ничего не разбирается и не собирается: очередь разбора и задания сбора живут
+    только в памяти. Сборы, застрявшие в незавершённом состоянии, помечаем ошибкой — иначе они
+    навсегда остаются «в очереди» или «идёт разбор», и непонятно, чего ждать."""
+    stuck = "status IN ('queued','processing','collecting')"
+    with catalog() as c:
+        ids = [r[0] for r in c.execute(f"SELECT id FROM cases WHERE {stuck}")]
+        if ids:
+            c.execute(f"UPDATE cases SET status='error', progress=0, stage='Прервано', "
+                      f"message='Работа прервана перезапуском LogAtlas — запустите заново' WHERE {stuck}")
+    for cid in ids:
+        try:
+            add_log(cid, "warn", "LogAtlas перезапустился, пока шла работа — разбор или сбор прерван")
+        except sqlite3.Error:
+            pass
+    return ids
