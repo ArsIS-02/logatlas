@@ -22,6 +22,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Тег совпадает с версией
+        run: |
+          v=$(sed -n 's/^VERSION = "\(.*\)"/\1/p' app/main.py)
+          if [ "${GITHUB_REF_NAME#v}" != "$v" ]; then
+            echo "::error::Тег $GITHUB_REF_NAME стоит на коммите с VERSION = $v в app/main.py. Перенесите тег на нужный коммит: git tag -f $GITHUB_REF_NAME <коммит> && git push -f origin $GITHUB_REF_NAME"
+            exit 1
+          fi
+
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
 

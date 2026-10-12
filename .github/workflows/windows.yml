@@ -51,7 +51,7 @@ jobs:
           $v = (Select-String -Path app\main.py -Pattern '^VERSION = "(.+)"').Matches[0].Groups[1].Value
           if ($env:GITHUB_REF_TYPE -eq 'tag') {
             $t = $env:GITHUB_REF_NAME.TrimStart('v')
-            if ($t -ne $v) { throw "Тег $env:GITHUB_REF_NAME не совпадает с VERSION = $v в app/main.py" }
+            if ($t -ne $v) { Write-Host "::error::Тег $env:GITHUB_REF_NAME стоит на коммите с VERSION = $v в app/main.py — перенесите тег на коммит этой версии"; exit 1 }
           }
           "version=$v" >> $env:GITHUB_OUTPUT
 

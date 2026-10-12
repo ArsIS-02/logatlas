@@ -35,7 +35,7 @@ jobs:
           test "$(uname -m)" = "${{ matrix.arch }}" || { echo "сборочная машина $(uname -m), а нужна ${{ matrix.arch }}"; exit 1; }
           v=$(sed -n 's/^VERSION = "\(.*\)"/\1/p' app/main.py)
           if [ "$GITHUB_REF_TYPE" = tag ] && [ "${GITHUB_REF_NAME#v}" != "$v" ]; then
-            echo "Тег $GITHUB_REF_NAME не совпадает с VERSION = $v в app/main.py"; exit 1
+            echo "::error::Тег $GITHUB_REF_NAME стоит на коммите с VERSION = $v в app/main.py — перенесите тег на коммит этой версии"; exit 1
           fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
           sw_vers; swiftc --version
