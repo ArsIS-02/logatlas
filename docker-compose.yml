@@ -20,3 +20,7 @@ services:
     environment:
       - TZ=UTC   # часовой пояс контейнера; на время в журналах не влияет
       - LOGATLAS_WORKERS=${LOGATLAS_WORKERS:-0}   # процессов разбора; 0 — по числу ядер
+      # загрузка правил SigmaHQ с github.com: прокси, если выход в интернет только через него (задайте в .env)
+      - HTTPS_PROXY=${HTTPS_PROXY:-}
+      - NO_PROXY=${NO_PROXY:-}
+      - LOGATLAS_SIGMA_UPDATE=${LOGATLAS_SIGMA_UPDATE:-1}   # 0 — без загрузки правил из сети

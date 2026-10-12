@@ -564,4 +564,9 @@ ol.steps span { color: var(--ink); word-break: break-word; }
 .sg-yaml pre { margin: 0; max-height: 420px; overflow: auto; font: 12px/1.5 var(--mono); color: var(--ink); white-space: pre-wrap; word-break: break-word; }
 .sg-rep details { margin-top: 6px; }
 .sg-rep ul { margin: 6px 0 0; padding-left: 18px; max-height: 260px; overflow: auto; font-size: 12.5px; }
+.sg-feed { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.sg-feed select { flex: 1 1 200px; max-width: 320px; }
+.sg-chk { display: inline-flex; gap: 7px; align-items: center; font-size: 13px; color: var(--ink-2); cursor: pointer; }
+#sg-upd-st:not(:empty) { margin-top: 10px; }
+.sg-upd-run { display: flex; gap: 8px; align-items: center; font-size: 13px; color: var(--ink-2); }
 .note.err { border-left-color: var(--s-critical); }

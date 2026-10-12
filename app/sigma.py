@@ -21,10 +21,14 @@ import io
 import ipaddress
 import json
 import logging
+import os
 import re
 import sqlite3
+import ssl
 import threading
 import time
+import urllib.error
+import urllib.request
 import zipfile
 
 from . import db
@@ -47,6 +51,8 @@ CREATE TABLE IF NOT EXISTS sigma_rules(
   id TEXT PRIMARY KEY, title TEXT, level TEXT, status TEXT, description TEXT, author TEXT, tags TEXT,
   product TEXT, category TEXT, service TEXT, yaml TEXT, error TEXT, enabled INTEGER DEFAULT 1,
   source TEXT, added REAL, updated REAL);
+CREATE TABLE IF NOT EXISTS sigma_feed(
+  id INTEGER PRIMARY KEY CHECK (id = 1), package TEXT, version TEXT, released TEXT, updated REAL, rules TEXT);
 """
 
 
@@ -733,15 +739,16 @@ def meta(rule_id: str) -> dict | None:
         return None
 
 
-def _docs_from(name: str, data: bytes):
-    """(имя файла, документ YAML) из .yml/.yaml или архива .zip с правилами."""
+def _docs_from(name: str, data: bytes, keep=None):
+    """(имя файла, документ YAML) из .yml/.yaml или архива .zip с правилами. keep(путь) — отбор файлов архива."""
     if name.lower().endswith(".zip"):
         with zipfile.ZipFile(io.BytesIO(data)) as z:
             for zi in z.infolist():
                 n = zi.filename
                 if zi.is_dir() or not n.lower().endswith((".yml", ".yaml")) or zi.file_size > MAX_FILE:
                     continue
-                if "/deprecated/" in n.lower() or "/unsupported/" in n.lower():
+                low = "/" + n.lower()
+                if "/deprecated/" in low or "/unsupported/" in low or (keep and not keep(n)):
                     continue
                 yield from _docs_from(n, z.read(zi))
         return
@@ -758,14 +765,16 @@ def _docs_from(name: str, data: bytes):
         yield name, ValueError(f"ошибка YAML: {str(e).splitlines()[0]}")
 
 
-def import_files(files: list[tuple[str, bytes]]) -> dict:
+def import_files(files: list[tuple[str, bytes]], keep=None, source: str = "", replace: set | None = None) -> dict:
+    """Импорт правил. replace — id правил прежней загрузки из того же источника: те, которых больше нет
+    в новом наборе, удаляются (свои правила пользователя не трогаются). Включено/выключено сохраняется."""
     if yaml is None:
         raise RuntimeError("Для правил Sigma нужен пакет PyYAML")
-    rep = {"added": 0, "updated": 0, "unsupported": 0, "errors": [], "skipped": 0, "problems": []}
+    rep = {"added": 0, "updated": 0, "removed": 0, "unsupported": 0, "errors": [], "skipped": 0, "problems": []}
     now = time.time()
     rows = []
     for fname, data in files:
-        for name, doc in _docs_from(fname, data):
+        for name, doc in _docs_from(fname, data, keep):
             if isinstance(doc, Exception):
                 rep["errors"].append(f"{name}: {doc}")
                 continue
@@ -785,14 +794,17 @@ def import_files(files: list[tuple[str, bytes]]) -> dict:
                          str(doc.get("description") or "")[:2000], str(doc.get("author") or "")[:300],
                          json.dumps([str(t) for t in doc.get("tags") or []], ensure_ascii=False),
                          str(ls.get("product") or ""), str(ls.get("category") or ""), str(ls.get("service") or ""),
-                         yaml.safe_dump(doc, allow_unicode=True, sort_keys=False), err, name[-300:]))
+                         yaml.safe_dump(doc, allow_unicode=True, sort_keys=False), err, (source + name)[-300:]))
             if err:
                 rep["unsupported"] += 1
                 if len(rep["problems"]) < 200:
                     rep["problems"].append({"file": name, "title": title, "reason": err})
+    new_ids = {r[0] for r in rows}
     with _lock, db.catalog() as c:
+        for rid in (replace or set()) - new_ids:          # убраны из набора (устарели, перенесены в deprecated)
+            rep["removed"] += c.execute("DELETE FROM sigma_rules WHERE id=?", (rid,)).rowcount
         have = {r[0] for r in c.execute("SELECT id FROM sigma_rules")}
-        if len(have | {r[0] for r in rows}) > MAX_RULES:
+        if len(have | new_ids) > MAX_RULES:
             raise RuntimeError(f"Не больше {MAX_RULES} правил Sigma")
         for r in rows:
             if r[0] in have:
@@ -805,6 +817,7 @@ def import_files(files: list[tuple[str, bytes]]) -> dict:
                 c.execute("INSERT INTO sigma_rules(id, title, level, status, description, author, tags, product, category, "
                           "service, yaml, error, source, enabled, added, updated) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)",
                           (*r, now, now))
+    rep["ids"] = sorted(new_ids)
     return rep
 
 
@@ -1014,3 +1027,195 @@ def start_apply(case_id: str | None = None) -> dict:
     APPLY.update(state="running", done=0, total=len(ids), findings=0)
     threading.Thread(target=apply_cases, args=(ids,), daemon=True, name="sigma-apply").start()
     return dict(APPLY)
+
+
+# ---------------------------------------------------------------------------
+# обновление из репозитория SigmaHQ (https://github.com/SigmaHQ/sigma) — фоном, с ходом для страницы правил
+UPSTREAM = os.environ.get("LOGATLAS_SIGMA_UPSTREAM", "https://github.com/SigmaHQ/sigma").rstrip("/")
+FEED_ENABLED = os.environ.get("LOGATLAS_SIGMA_UPDATE", "1") != "0"
+MAX_DOWNLOAD = 100 << 20
+# ключ → (название, описание, файл релиза или None для основной ветки)
+PACKAGES = {
+    "core": ("Core", "проверенные правила высокого и критичного уровня — мало ложных срабатываний", "sigma_core.zip"),
+    "core+": ("Core+", "то же и правила среднего уровня — больше охват, нужен разбор срабатываний", "sigma_core+.zip"),
+    "core++": ("Core++", "Core+ и экспериментальные правила", "sigma_core++.zip"),
+    "all": ("Все правила", "Core++ и правила новых угроз (Emerging Threats)", "sigma_all_rules.zip"),
+    "master": ("Основная ветка", "самые свежие правила, ещё не вошедшие в релиз; без проверки релизом", None),
+}
+DEFAULT_PACKAGE = "core+"
+_MASTER_DIRS = ("rules", "rules-emerging-threats", "rules-threat-hunting")
+
+UPDATE = {"state": "idle", "stage": None, "package": None, "received": 0, "size": 0, "error": None, "report": None,
+          "started": None, "finished": None}
+
+
+def packages() -> list[dict]:
+    return [{"id": k, "title": t, "desc": d} for k, (t, d, _) in PACKAGES.items()]
+
+
+def feed_info() -> dict | None:
+    """Последняя загрузка из SigmaHQ: набор, версия, дата релиза, сколько правил."""
+    try:
+        with db.catalog() as c:
+            r = c.execute("SELECT package, version, released, updated, rules FROM sigma_feed WHERE id=1").fetchone()
+    except sqlite3.OperationalError:
+        return None
+    if not r:
+        return None
+    return {"package": r[0], "title": PACKAGES.get(r[0], (r[0],))[0], "version": r[1], "released": r[2],
+            "updated": r[3], "count": len(json.loads(r[4] or "[]"))}
+
+
+def _ssl_context() -> ssl.SSLContext:
+    """Проверка сертификатов: системное хранилище, а если оно пусто (встроенный Python приложения
+    для macOS) — certifi или /etc/ssl/cert.pem. SSL_CERT_FILE задаёт свой корневой сертификат (прокси с подменой)."""
+    ctx = ssl.create_default_context()
+    if ctx.cert_store_stats().get("x509_ca") or os.environ.get("SSL_CERT_FILE") or os.environ.get("SSL_CERT_DIR"):
+        return ctx
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        pass
+    if os.path.isfile("/etc/ssl/cert.pem"):
+        return ssl.create_default_context(cafile="/etc/ssl/cert.pem")
+    return ctx
+
+
+def _download(url: str) -> bytes:
+    req = urllib.request.Request(url, headers={"User-Agent": "LogAtlas (Sigma rules update)"})
+    buf = io.BytesIO()
+    with urllib.request.urlopen(req, timeout=60, context=_ssl_context()) as r:
+        UPDATE["size"] = int(r.headers.get("Content-Length") or 0)
+        while True:
+            chunk = r.read(256 << 10)
+            if not chunk:
+                break
+            buf.write(chunk)
+            UPDATE["received"] = buf.tell()
+            if buf.tell() > MAX_DOWNLOAD:
+                raise RuntimeError("Архив правил больше 100 МБ — загрузка остановлена")
+    return buf.getvalue()
+
+
+def _release_version(data: bytes) -> tuple[str, str]:
+    """(метка, дата) из version.txt пакета релиза SigmaHQ."""
+    label = released = ""
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            names = [n for n in z.namelist() if n.rsplit("/", 1)[-1] == "version.txt"]
+            text = z.read(names[0]).decode("utf-8", "replace") if names else ""
+    except (zipfile.BadZipFile, KeyError):
+        raise RuntimeError("Скачанный файл — не архив правил .zip") from None
+    for line in text.splitlines():
+        k, _, v = line.partition(":")
+        if k.strip().lower() == "release date":
+            released = v.strip()
+        elif k.strip().lower() == "label":
+            label = v.strip()
+    return label, released
+
+
+def _master_version(data: bytes) -> str:
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            sha = z.comment.decode("ascii", "ignore").strip()   # GitHub пишет в комментарий архива коммит
+    except zipfile.BadZipFile:
+        raise RuntimeError("Скачанный файл — не архив правил .zip") from None
+    return f"master @ {sha[:9]}" if re.fullmatch(r"[0-9a-f]{40}", sha) else "master"
+
+
+def _master_keep(name: str) -> bool:
+    parts = name.split("/")
+    return len(parts) > 2 and parts[1] in _MASTER_DIRS          # sigma-master/rules/… и т. п.
+
+
+def _net_error(e: Exception) -> str:
+    host = re.sub(r"^https?://([^/]+).*", r"\1", UPSTREAM)
+    offline = (" Если у этого компьютера нет доступа в интернет, скачайте архив на другом "
+               f"({UPSTREAM}/releases) и импортируйте его файлом ниже.")
+    if isinstance(e, urllib.error.HTTPError):
+        if e.code == 404:
+            return f"На {host} нет такого пакета правил (HTTP 404)."
+        if e.code in (403, 429):
+            return f"{host} временно ограничил загрузки (HTTP {e.code}) — попробуйте позже." + offline
+        return f"{host} ответил ошибкой HTTP {e.code}." + offline
+    reason = getattr(e, "reason", e)
+    if isinstance(reason, ssl.SSLCertVerificationError) or isinstance(e, ssl.SSLCertVerificationError):
+        return (f"Не удалось проверить сертификат {host}: {getattr(reason, 'verify_message', reason)}. "
+                "Если в сети прокси с собственным корневым сертификатом — укажите его в переменной SSL_CERT_FILE.")
+    return f"Нет связи с {host}: {reason}." + offline
+
+
+def _update(package: str, apply: bool):
+    title, _, asset = PACKAGES[package]
+    try:
+        url = f"{UPSTREAM}/releases/latest/download/{asset}" if asset else f"{UPSTREAM}/archive/refs/heads/master.zip"
+        UPDATE["stage"] = f"Загрузка набора «{title}» из SigmaHQ…"
+        try:
+            data = _download(url)
+        except (urllib.error.URLError, OSError) as e:
+            raise RuntimeError(_net_error(e)) from None
+        if asset:
+            version, released = _release_version(data)
+            keep = None
+        else:
+            version, released, keep = _master_version(data), time.strftime("%Y-%m-%d"), _master_keep
+        prev = feed_info()
+        with db.catalog() as c:
+            r = c.execute("SELECT rules FROM sigma_feed WHERE id=1").fetchone()
+        old_ids = set(json.loads(r[0] or "[]")) if r else set()
+        if prev and prev["package"] == package and version and prev["version"] == version and old_ids:
+            with db.catalog() as c:
+                have = {x[0] for x in c.execute("SELECT id FROM sigma_rules")}
+            if old_ids <= have:                          # та же версия и ничего не удалено вручную
+                with db.catalog() as c:
+                    c.execute("UPDATE sigma_feed SET updated=? WHERE id=1", (time.time(),))
+                UPDATE.update(report={"same": True, "package": package, "title": title, "version": version,
+                                      "released": released, "added": 0, "updated": 0, "removed": 0,
+                                      "unsupported": 0, "errors": [], "problems": [], "skipped": 0})
+                return
+        UPDATE["stage"] = "Разбор правил…"
+        rep = import_files([(asset or "sigma-master.zip", data)], keep=keep, source="SigmaHQ · ", replace=old_ids)
+        ids = rep.pop("ids")
+        if not ids:
+            raise RuntimeError("В скачанном архиве не нашлось правил Sigma")
+        with db.catalog() as c:
+            c.execute("INSERT INTO sigma_feed(id, package, version, released, updated, rules) VALUES (1,?,?,?,?,?) "
+                      "ON CONFLICT(id) DO UPDATE SET package=excluded.package, version=excluded.version, "
+                      "released=excluded.released, updated=excluded.updated, rules=excluded.rules",
+                      (package, version, released, time.time(), json.dumps(ids)))
+        rep.update(package=package, title=title, version=version, released=released, same=False)
+        rep["problems"] = rep["problems"][:100]
+        rep["errors"] = rep["errors"][:50]
+        if apply and (rep["added"] or rep["updated"] or rep["removed"]):
+            try:
+                start_apply()
+                rep["applying"] = True
+            except RuntimeError:
+                pass
+        UPDATE["report"] = rep
+        log.info("sigma update %s %s: +%d ~%d -%d", package, version, rep["added"], rep["updated"], rep["removed"])
+    except Exception as e:  # noqa: BLE001
+        if not isinstance(e, RuntimeError):
+            log.exception("sigma update failed")
+        UPDATE["error"] = str(e) or type(e).__name__
+    finally:
+        UPDATE.update(state="idle", stage=None, finished=time.time())
+
+
+def start_update(package: str | None, apply: bool = True) -> dict:
+    if not FEED_ENABLED:
+        raise RuntimeError("Загрузка правил из SigmaHQ отключена (LOGATLAS_SIGMA_UPDATE=0)")
+    if yaml is None:
+        raise RuntimeError("Для правил Sigma нужен пакет PyYAML")
+    package = package or DEFAULT_PACKAGE
+    if package not in PACKAGES:
+        raise RuntimeError("Неизвестный набор правил")
+    with _lock:
+        if UPDATE["state"] == "running":
+            raise RuntimeError("Правила уже загружаются")
+        UPDATE.update(state="running", stage="Подключение…", package=package, received=0, size=0, error=None,
+                      report=None, started=time.time(), finished=None)
+    threading.Thread(target=_update, args=(package, apply), daemon=True, name="sigma-update").start()
+    return dict(UPDATE)

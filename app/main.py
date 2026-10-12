@@ -26,7 +26,7 @@ from .parsers import SUPPORTED
 from .parsers.base import CATEGORIES
 from .timeutil import fmt_tz, ms_to_str
 
-VERSION = "1.5.1"
+VERSION = "1.6.0"
 STATIC = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
 log = logging.getLogger("logatlas")
 
@@ -620,6 +620,8 @@ def baseline_clear(req):
 def sigma_list(req):
     rules = sigma.list_rules()
     return J({"rules": rules, "apply": sigma.APPLY, "yaml": sigma.yaml is not None,
+              "feed": sigma.feed_info(), "update": sigma.UPDATE, "packages": sigma.packages(),
+              "feed_enabled": sigma.FEED_ENABLED, "default_package": sigma.DEFAULT_PACKAGE, "upstream": sigma.UPSTREAM,
               "counts": {"total": len(rules), "enabled": sum(1 for r in rules if r["enabled"] and not r["error"]),
                          "unsupported": sum(1 for r in rules if r["error"])}})
 
@@ -641,6 +643,7 @@ async def sigma_import(req: Request):
         rep = await run_in_threadpool(sigma.import_files, files)
     except RuntimeError as e:
         return _err(str(e))
+    rep.pop("ids", None)
     return J(rep)
 
 
@@ -674,6 +677,22 @@ async def sigma_apply(req: Request):
 
 def sigma_apply_status(req):
     return J(sigma.APPLY)
+
+
+async def sigma_update(req: Request):
+    try:
+        body = await req.json()
+    except ValueError:
+        body = {}
+    body = body or {}
+    try:
+        return J(sigma.start_update(body.get("package"), bool(body.get("apply", True))))
+    except RuntimeError as e:
+        return _err(str(e))
+
+
+def sigma_update_status(req):
+    return J({**sigma.UPDATE, "feed": sigma.feed_info()})
 
 
 def _is_local(req: Request) -> bool:
@@ -754,6 +773,8 @@ routes = [
     Route("/api/sigma", sigma_delete, methods=["DELETE"]),
     Route("/api/sigma/apply", sigma_apply, methods=["POST"]),
     Route("/api/sigma/apply", sigma_apply_status, methods=["GET"]),
+    Route("/api/sigma/update", sigma_update, methods=["POST"]),
+    Route("/api/sigma/update", sigma_update_status, methods=["GET"]),
     Route("/api/sigma/rules/{rid}", sigma_get),
     Route("/api/compare", compare_cases),
     Route("/api/cases/{cid}/compare-candidates", compare_candidates),

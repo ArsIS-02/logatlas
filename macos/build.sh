@@ -116,8 +116,9 @@ step 'проверка модулей'
   cd /tmp
   LOGATLAS_DATA="$BUILD/check-data" PYTHONDONTWRITEBYTECODE=1 "$PY" -c "
 import sys; sys.path.insert(0, '$L')
-import app.main, starlette, uvicorn, multipart, yaml, importlib.util as u
+import app.main, app.sigma, starlette, uvicorn, multipart, yaml, ssl, importlib.util as u
 assert u.find_spec('evtx') or u.find_spec('Evtx'), 'evtx'
+assert app.sigma._ssl_context().cert_store_stats().get('x509_ca'), 'no CA certificates for HTTPS'
 print('modules ok, LogAtlas', app.main.VERSION, 'orjson' if u.find_spec('orjson') else 'json')"
 )
 rm -rf "$BUILD/check-data"

@@ -1,4 +1,4 @@
-// Правила Sigma: импорт .yml / .zip, список с фильтрами, включение и выключение, применение к сборам
+// Правила Sigma: загрузка наборов SigmaHQ, импорт .yml / .zip, список с фильтрами, включение и выключение, применение к сборам
 import { api } from '../api.js';
 import { $, $$, esc, fmtN, fmtTime, h, mount, raw, sevLabel, toast } from '../util.js';
 
@@ -6,6 +6,7 @@ const PRODUCTS = [['', 'Все системы'], ['windows', 'Windows'], ['linux
 const STATES = [['', 'Все'], ['on', 'Включены'], ['off', 'Выключены'], ['bad', 'Не применяются']];
 const LEVELS = [['', 'Любой уровень'], ['critical', 'Критично'], ['high', 'Высокая'], ['medium', 'Средняя'], ['low', 'Низкая'], ['info', 'Инфо']];
 const SHOW = 400;
+const ruDate = (d) => (/^\d{4}-\d{2}-\d{2}$/.test(d || '') ? d.split('-').reverse().join('.') : d);
 
 function uploadFiles(files, onProgress) {
   return new Promise((resolve, reject) => {
@@ -35,12 +36,20 @@ export async function renderRules(view) {
   mount(view, h`
     <div class="grid g-collect">
       <section class="panel">
-        <div class="panel-h"><h2>Импорт правил</h2></div>
-        <form class="drop small-drop" id="sg-drop">
+        <div class="panel-h"><h2>Правила SigmaHQ</h2><span class="sub" id="sg-feed-sub"></span></div>
+        ${data.feed_enabled ? h`<p class="ink2" style="font-size:13px;margin:0 0 12px">Готовые наборы из открытого репозитория
+          <a href="${data.upstream}" target="_blank" rel="noopener">SigmaHQ</a> на GitHub. Повторная загрузка обновляет набор: новые правила добавятся, изменённые обновятся, убранные из SigmaHQ удалятся. Выключенные правила останутся выключенными, импортированные вами — не тронутся.</p>
+        <div class="sg-feed">
+          <select class="field" id="sg-pkg" aria-label="Набор правил">${data.packages.map((p) => h`<option value="${p.id}">${p.title}</option>`)}</select>
+          <button class="btn primary" type="button" id="sg-upd">Загрузить</button>
+        </div>
+        <p class="muted" id="sg-pkg-desc" style="font-size:12.5px;margin:6px 0 8px"></p>
+        <label class="sg-chk"><input type="checkbox" id="sg-upd-apply" checked> Сразу проверить разобранные сборы новыми правилами</label>
+        <div id="sg-upd-st"></div>` : h`<p class="ink2" style="font-size:13px;margin:0 0 12px">Загрузка наборов из SigmaHQ отключена администратором — импортируйте правила файлами ниже.</p>`}
+        <form class="drop small-drop" id="sg-drop" style="margin-top:14px">
           <div>
-            <p class="ink2" style="margin:0 0 10px">Файлы правил <span class="mono">.yml</span> или архив <span class="mono">.zip</span> с ними — например, весь репозиторий
-              <a href="https://github.com/SigmaHQ/sigma" target="_blank" rel="noopener">SigmaHQ</a> (Code → Download ZIP) или файл <span class="mono">sigma_core.zip</span> из его релизов. Перетащите сюда или выберите:</p>
-            <div class="btn-row"><label class="btn primary" for="sg-files">Выбрать файлы</label><input id="sg-files" type="file" multiple accept=".yml,.yaml,.zip" class="hidden">
+            <p class="ink2" style="margin:0 0 10px">Свои правила <span class="mono">.yml</span> или архив <span class="mono">.zip</span> — например, пакет SigmaHQ, скачанный на другом компьютере, если здесь нет интернета. Перетащите сюда или выберите:</p>
+            <div class="btn-row"><label class="btn" for="sg-files">Выбрать файлы</label><input id="sg-files" type="file" multiple accept=".yml,.yaml,.zip" class="hidden">
               <span class="muted" id="sg-st" style="font-size:12.5px"></span></div>
           </div>
         </form>
@@ -99,7 +108,7 @@ export async function renderRules(view) {
     const shown = list.slice(0, SHOW);
     const box = $('#sg-list');
     if (!data.rules.length) {
-      mount(box, h`<div class="empty">Правил Sigma пока нет — импортируйте файлы .yml или архив .zip.</div>`);
+      mount(box, h`<div class="empty">Правил Sigma пока нет — загрузите набор SigmaHQ или импортируйте файлы .yml / .zip.</div>`);
       return;
     }
     if (!list.length) { mount(box, h`<div class="empty">Под фильтр ничего не подходит</div>`); return; }
@@ -184,6 +193,14 @@ export async function renderRules(view) {
   bindF('#sg-level', 'level');
   bindF('#sg-state', 'state');
 
+  const reportHtml = (rep, extra) => h`<div class="note sg-rep">
+        ${extra || ''}Добавлено: <b>${fmtN(rep.added)}</b>, обновлено: <b>${fmtN(rep.updated)}</b>${rep.removed ? h`, удалено устаревших: <b>${fmtN(rep.removed)}</b>` : ''}, не применяются: <b>${fmtN(rep.unsupported)}</b>${rep.skipped ? `, пропущено не-правил: ${fmtN(rep.skipped)}` : ''}${rep.errors.length ? `, ошибок: ${rep.errors.length}` : ''}.
+        ${rep.errors.length || rep.problems.length ? h`<details><summary>Подробности</summary>
+          ${rep.errors.length ? h`<ul>${rep.errors.slice(0, 50).map((x) => h`<li>${x}</li>`)}</ul>` : ''}
+          ${rep.problems.length ? h`<ul>${rep.problems.slice(0, 100).map((p) => h`<li>${p.title} — ${p.reason}</li>`)}</ul>` : ''}</details>` : ''}
+        ${rep.applying ? h`<div style="margin-top:6px">Разобранные сборы проверяются новыми правилами — ход в блоке «Проверка сборов».</div>`
+          : h`<div style="margin-top:6px">Чтобы проверить уже разобранные сборы, нажмите «Применить ко всем сборам».</div>`}</div>`;
+
   // импорт
   async function doImport(files) {
     if (!files || !files.length) return;
@@ -192,12 +209,7 @@ export async function renderRules(view) {
     try {
       const rep = await uploadFiles(files, (p) => { st.textContent = p < 1 ? `Передача ${Math.round(p * 100)}%` : 'Разбор правил…'; });
       st.textContent = '';
-      mount($('#sg-report'), h`<div class="note sg-rep">
-        Добавлено: <b>${fmtN(rep.added)}</b>, обновлено: <b>${fmtN(rep.updated)}</b>, не применяются: <b>${fmtN(rep.unsupported)}</b>${rep.skipped ? `, пропущено не-правил: ${fmtN(rep.skipped)}` : ''}${rep.errors.length ? `, ошибок: ${rep.errors.length}` : ''}.
-        ${rep.errors.length || rep.problems.length ? h`<details><summary>Подробности</summary>
-          ${rep.errors.length ? h`<ul>${rep.errors.slice(0, 50).map((x) => h`<li>${x}</li>`)}</ul>` : ''}
-          ${rep.problems.length ? h`<ul>${rep.problems.slice(0, 100).map((p) => h`<li>${p.title} — ${p.reason}</li>`)}</ul>` : ''}</details>` : ''}
-        <div style="margin-top:6px">Чтобы проверить уже разобранные сборы, нажмите «Применить ко всем сборам».</div></div>`);
+      mount($('#sg-report'), reportHtml(rep));
       await reload();
     } catch (err) {
       st.textContent = '';
@@ -239,6 +251,71 @@ export async function renderRules(view) {
   });
   if (drawApply(data.apply)) pollApply();
   if (!data.yaml) mount($('#sg-report'), h`<div class="note err">В этой сборке нет пакета PyYAML — импорт правил Sigma недоступен.</div>`);
+
+  // загрузка набора из SigmaHQ
+  let updTimer = null;
+  const MB = (n) => `${(n / 1048576).toLocaleString('ru-RU', { maximumFractionDigits: 1 })} МБ`;
+  const drawFeed = (feed) => {
+    const sub = $('#sg-feed-sub');
+    if (!sub) return;
+    sub.textContent = feed ? `${feed.title}${feed.released ? ` от ${ruDate(feed.released)}` : ''} · ${fmtN(feed.count)} правил` : 'ещё не загружались';
+    const btn = $('#sg-upd');
+    if (btn && !btn.disabled) btn.textContent = feed && feed.package === $('#sg-pkg').value ? 'Проверить обновления' : 'Загрузить';
+  };
+  const drawPkg = () => {
+    const p = data.packages.find((x) => x.id === $('#sg-pkg').value);
+    $('#sg-pkg-desc').textContent = p ? `${p.title}: ${p.desc}.` : '';
+    drawFeed(data.feed);
+  };
+  const drawUpdate = (u, feed) => {
+    const st = $('#sg-upd-st');
+    const btn = $('#sg-upd');
+    if (!st) return false;
+    if (u.state === 'running') {
+      btn.disabled = true;
+      btn.textContent = 'Загрузка…';
+      const got = u.received ? ` — ${MB(u.received)}${u.size ? ` из ${MB(u.size)}` : ''}` : '';
+      mount(st, h`<div class="sg-upd-run"><span class="spinner"></span> ${u.stage || 'Загрузка…'}${got}</div>`);
+      return true;
+    }
+    btn.disabled = false;
+    data.feed = feed !== undefined ? feed : data.feed;
+    drawFeed(data.feed);
+    if (u.error) mount(st, h`<div class="note err">${u.error}</div>`);
+    else if (u.report && u.report.same) mount(st, h`<div class="note sg-rep">У вас уже последняя версия набора «${u.report.title}»${u.report.released ? ` (релиз от ${ruDate(u.report.released)})` : ''} — изменений нет.</div>`);
+    else if (u.report) mount(st, reportHtml(u.report, h`Набор «${u.report.title}»${u.report.released ? ` от ${ruDate(u.report.released)}` : ''}${u.report.version ? h` <span class="mono muted">${u.report.version}</span>` : ''}. `));
+    else st.textContent = '';
+    return false;
+  };
+  const pollUpdate = () => {
+    clearInterval(updTimer);
+    updTimer = setInterval(async () => {
+      if (!document.body.contains($('#sg-upd'))) { clearInterval(updTimer); return; }
+      try {
+        const u = await api.get('/api/sigma/update');
+        if (!drawUpdate(u, u.feed)) {
+          clearInterval(updTimer);
+          if (u.report && !u.report.same) {
+            await reload();
+            if (u.report.applying) { drawApply(await api.get('/api/sigma/apply')); pollApply(); }
+          }
+        }
+      } catch (e) { /* повторим */ }
+    }, 800);
+  };
+  if (data.feed_enabled && $('#sg-pkg')) {
+    $('#sg-pkg').value = (data.update.state === 'running' && data.update.package) || (data.feed && data.feed.package) || data.default_package;
+    $('#sg-pkg').addEventListener('change', drawPkg);
+    drawPkg();
+    $('#sg-upd').addEventListener('click', async () => {
+      try {
+        drawUpdate(await api.post('/api/sigma/update', { package: $('#sg-pkg').value, apply: $('#sg-upd-apply').checked }));
+        pollUpdate();
+      } catch (err) { toast(err.message); }
+    });
+    if (drawUpdate(data.update)) pollUpdate();
+    if (!data.yaml) $('#sg-upd').disabled = true;
+  }
 
   drawCounts();
   drawList();

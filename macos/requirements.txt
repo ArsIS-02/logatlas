@@ -5,3 +5,5 @@ python-multipart>=0.0.9
 orjson>=3.10
 evtx
 PyYAML>=6.0
+# корневые сертификаты для загрузки правил SigmaHQ (у встроенного Python нет доступа к связке ключей macOS)
+certifi
