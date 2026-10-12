@@ -1,4 +1,4 @@
-# LogAtlas для macOS (Apple Silicon и Intel): окно на WebKit со встроенным Python, образ диска .dmg.
+# LogAtlas для macOS (Apple Silicon и Intel): окно на WebKit со встроенным Python, установщик .pkg и образ диска .dmg.
 # Собирает и проверяет на macOS каждой архитектуры при каждом изменении; готовые файлы — в артефактах
 # запуска (Actions → macOS → Artifacts). При теге vX.Y.Z прикладывает их к релизу, который создаёт release.yml.
 name: macOS
@@ -52,6 +52,7 @@ jobs:
           name: LogAtlas-${{ steps.ver.outputs.version }}-macos-${{ matrix.arch }}
           path: |
             dist/LogAtlas-*-macos-${{ matrix.arch }}.dmg
+            dist/LogAtlas-*-macos-${{ matrix.arch }}.pkg
             dist/SHA256SUMS-macos-${{ matrix.arch }}.txt
           if-no-files-found: error
 
@@ -71,4 +72,5 @@ jobs:
           # релиз создаёт release.yml (образы Docker собираются дольше) — ждём его до 45 минут
           for i in $(seq 1 90); do gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 && break; sleep 30; done
           gh release view "$GITHUB_REF_NAME" >/dev/null
-          gh release upload "$GITHUB_REF_NAME" dist/LogAtlas-*-macos-${{ matrix.arch }}.dmg dist/SHA256SUMS-macos-${{ matrix.arch }}.txt --clobber
+          gh release upload "$GITHUB_REF_NAME" dist/LogAtlas-*-macos-${{ matrix.arch }}.dmg \
+            dist/LogAtlas-*-macos-${{ matrix.arch }}.pkg dist/SHA256SUMS-macos-${{ matrix.arch }}.txt --clobber

@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Описание установщика LogAtlas для macOS; @VERSION@ и @ARCH@ подставляет macos/build.sh.
+     Проверка до установки: версия macOS и процессор — чтобы сборку под другой процессор нельзя было
+     поставить и получить программу, которая молча не запускается. -->
+<installer-gui-script minSpecVersion="2">
+    <title>LogAtlas @VERSION@</title>
+    <organization>io.github.arsis-02</organization>
+    <options customize="never" require-scripts="true" hostArchitectures="x86_64,arm64"/>
+    <welcome file="welcome.html" mime-type="text/html"/>
+    <conclusion file="conclusion.html" mime-type="text/html"/>
+    <installation-check script="logatlas_check()"/>
+    <script><![CDATA[
+function logatlas_check() {
+    var v = system.version.ProductVersion;
+    if (system.compareVersions(v, '12.0') < 0) {
+        my.result.type = 'Fatal';
+        my.result.title = 'Нужна macOS 12 или новее';
+        my.result.message = 'На этом компьютере macOS ' + v + ', а LogAtlas работает начиная с macOS 12 (Monterey).';
+        return false;
+    }
+    var apple_silicon = false;
+    try { apple_silicon = (system.sysctl('hw.optional.arm64') == 1); } catch (e) { apple_silicon = false; }
+    var need_apple_silicon = ('@ARCH@' == 'arm64');
+    if (need_apple_silicon && !apple_silicon) {
+        // сборка для Apple Silicon на Intel не запустится вовсе
+        my.result.type = 'Fatal';
+        my.result.title = 'Установщик для другого процессора';
+        my.result.message = 'Это сборка для Mac на Apple Silicon (M1–M4), а здесь процессор Intel. ' +
+            'Скачайте LogAtlas-@VERSION@-macos-x86_64.pkg.';
+        return false;
+    }
+    if (!need_apple_silicon && apple_silicon) {
+        // сборка для Intel на Apple Silicon работает через Rosetta — предупреждаем, но не мешаем
+        my.result.type = 'Warn';
+        my.result.title = 'Есть сборка для вашего процессора';
+        my.result.message = 'Это сборка для Mac на Intel. Она заработает через Rosetta, но для Apple Silicon ' +
+            'есть отдельная: LogAtlas-@VERSION@-macos-arm64.pkg — она быстрее.';
+        return false;
+    }
+    return true;
+}
+    ]]></script>
+    <choices-outline>
+        <line choice="default"/>
+    </choices-outline>
+    <choice id="default" title="LogAtlas">
+        <pkg-ref id="io.github.arsis-02.logatlas"/>
+    </choice>
+    <pkg-ref id="io.github.arsis-02.logatlas" version="@VERSION@" onConclusion="none">LogAtlas-component.pkg</pkg-ref>
+</installer-gui-script>

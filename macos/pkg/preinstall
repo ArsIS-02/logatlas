@@ -1,0 +1,41 @@
+#!/bin/bash
+# Перед установкой: закрыть работающий LogAtlas, иначе обновление подменит файлы под работающей
+# программой. Скрипт выполняется от root; $3 — том, куда идёт установка.
+# Любая неудача здесь не должна срывать установку, поэтому выходим с нулём в любом случае.
+APP="${3%/}/Applications/LogAtlas.app"
+BIN="$APP/Contents/MacOS/LogAtlas"
+PY="$APP/Contents/Resources/python/bin/python3"
+
+# подстраховка на случай, если проверка из distribution.xml не отработала. Отказываем только там, где
+# программа не запустится вовсе: сборка для Apple Silicon на Intel. Обратный случай (сборка для Intel
+# на Apple Silicon) работает через Rosetta — установщик про это предупреждает, но не мешает.
+NEED_ARCH="@ARCH@"
+HAVE_ARCH=$(uname -m)
+if [ "$NEED_ARCH" = arm64 ] && [ "$HAVE_ARCH" != arm64 ]; then
+  echo "LogAtlas: это сборка для Mac на Apple Silicon, а процессор этого компьютера — $HAVE_ARCH" >&2
+  exit 1
+fi
+
+[ -x "$BIN" ] || exit 0                      # прежней установки нет — закрывать нечего
+
+# сначала вежливо: попросить программу закрыться от имени того, кто сидит за компьютером
+user=$(stat -f %Su /dev/console 2>/dev/null)
+if [ -n "$user" ] && [ "$user" != root ]; then
+  uid=$(id -u "$user" 2>/dev/null)
+  [ -n "$uid" ] && launchctl asuser "$uid" sudo -u "$user" \
+    osascript -e 'tell application id "io.github.arsis-02.logatlas" to quit' >/dev/null 2>&1
+fi
+
+running() { pgrep -f "^$BIN" >/dev/null 2>&1; }
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  running || break
+  sleep 1
+done
+# не закрылась — завершаем по имени файла программы (шаблон привязан к началу строки запуска,
+# чтобы не задеть ничего постороннего)
+running && { pkill -f "^$BIN" >/dev/null 2>&1; sleep 2; }
+running && { pkill -9 -f "^$BIN" >/dev/null 2>&1; sleep 1; }
+# сервер завершается вместе с окном сам; на случай, если окно сняли принудительно
+pkill -f "^$PY " >/dev/null 2>&1
+
+exit 0

@@ -145,5 +145,27 @@ for i in 1 2 3; do       # hdiutil на сборочных машинах ино
   [ "$i" = 3 ] && exit 1
   sleep 5
 done
-(cd "$DIST" && shasum -a 256 "$(basename "$DMG")" > "SHA256SUMS-macos-$ARCH.txt")
-du -sh "$APP" "$DMG"
+# --- установщик: тот же LogAtlas.app, но со скриптами (проверка процессора и macOS, закрытие
+#     работающей копии при обновлении, снятие карантина) — см. macos/pkg/
+step 'установщик'
+PKGROOT=$BUILD/pkgroot
+PKGSCRIPTS=$BUILD/pkgscripts
+PKGRES=$BUILD/pkgres
+rm -rf "$PKGROOT" "$PKGSCRIPTS" "$PKGRES"
+mkdir -p "$PKGROOT/Applications" "$PKGSCRIPTS" "$PKGRES"
+ditto "$APP" "$PKGROOT/Applications/LogAtlas.app"
+sed "s/@ARCH@/$ARCH/g" macos/pkg/preinstall > "$PKGSCRIPTS/preinstall"
+cp macos/pkg/postinstall "$PKGSCRIPTS/postinstall"
+chmod +x "$PKGSCRIPTS/preinstall" "$PKGSCRIPTS/postinstall"
+for f in welcome conclusion; do
+  sed "s/@VERSION@/$VERSION/g" "macos/pkg/$f.html" > "$PKGRES/$f.html"
+done
+sed -e "s/@VERSION@/$VERSION/g" -e "s/@ARCH@/$ARCH/g" macos/pkg/distribution.xml > "$BUILD/distribution.xml"
+pkgbuild --root "$PKGROOT" --identifier io.github.arsis-02.logatlas --version "$VERSION" \
+  --install-location / --scripts "$PKGSCRIPTS" "$BUILD/LogAtlas-component.pkg" >/dev/null
+PKG=$DIST/LogAtlas-$VERSION-macos-$ARCH.pkg
+rm -f "$PKG"
+productbuild --distribution "$BUILD/distribution.xml" --package-path "$BUILD" --resources "$PKGRES" "$PKG" >/dev/null
+
+(cd "$DIST" && shasum -a 256 "$(basename "$DMG")" "$(basename "$PKG")" > "SHA256SUMS-macos-$ARCH.txt")
+du -sh "$APP" "$DMG" "$PKG"

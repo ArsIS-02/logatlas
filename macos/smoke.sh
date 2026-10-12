@@ -80,4 +80,54 @@ grep -q "^ok v$VERSION" "$RESULT" || fail "интерфейс не открыл�
 sleep 2
 pgrep -f "$APP/Contents/Resources/python" >/dev/null && fail 'сервер окна остался после выхода'
 
+step 'установщик: состав пакета'
+PKG=dist/LogAtlas-$VERSION-macos-$ARCH.pkg
+[ -s "$PKG" ] || fail "нет установщика $PKG"
+EXP=$WORK/pkg
+pkgutil --expand-full "$PKG" "$EXP" || fail 'установщик не распаковывается'
+[ -s "$EXP/Distribution" ] || fail 'в пакете нет Distribution'
+grep -q 'logatlas_check' "$EXP/Distribution" || fail 'в пакете нет проверки перед установкой'
+grep -q "'12.0'" "$EXP/Distribution" || fail 'в пакете нет проверки версии macOS'
+SC=$EXP/LogAtlas-component.pkg/Scripts
+for s in preinstall postinstall; do
+  [ -x "$SC/$s" ] || fail "в пакете нет скрипта $s"
+done
+grep -q "NEED_ARCH=\"$ARCH\"" "$SC/preinstall" || fail "в preinstall не подставлена архитектура $ARCH"
+[ -d "$EXP/LogAtlas-component.pkg/Payload/Applications/LogAtlas.app" ] ||
+  fail 'в пакете нет Applications/LogAtlas.app'
+echo "   скрипты и проверки на месте"
+
+step 'установщик: установка'
+INSTALLED=/Applications/LogAtlas.app
+sudo rm -rf "$INSTALLED"
+sudo installer -pkg "$PKG" -target / >/dev/null || fail 'установщик отработал с ошибкой'
+[ -d "$INSTALLED" ] || fail 'после установки нет /Applications/LogAtlas.app'
+codesign --verify "$INSTALLED" || fail 'подпись установленной программы не сходится'
+V=$(defaults read "$INSTALLED/Contents/Info.plist" CFBundleShortVersionString)
+[ "$V" = "$VERSION" ] || fail "установилась версия $V вместо $VERSION"
+xattr -p com.apple.quarantine "$INSTALLED" >/dev/null 2>&1 && fail 'на установленной программе остался карантин'
+pkgutil --pkgs | grep -qx 'io.github.arsis-02.logatlas' || fail 'установщик не оставил квитанцию'
+echo "   установлено в «Программы», карантина нет"
+
+step 'установщик: обновление поверх работающей копии'
+"$INSTALLED/Contents/MacOS/LogAtlas" >"$WORK/installed.log" 2>&1 &
+RUN=$!
+for _ in $(seq 1 60); do
+  pgrep -f "^$INSTALLED/Contents/MacOS/LogAtlas" >/dev/null 2>&1 && break
+  sleep 1
+done
+pgrep -f "^$INSTALLED/Contents/MacOS/LogAtlas" >/dev/null 2>&1 || fail 'установленная программа не запустилась'
+sudo installer -pkg "$PKG" -target / >/dev/null || fail 'обновление поверх не прошло'
+pgrep -f "^$INSTALLED/Contents/MacOS/LogAtlas" >/dev/null 2>&1 &&
+  fail 'установщик не закрыл работающую копию'
+wait "$RUN" 2>/dev/null || true
+sleep 2
+pgrep -f "^$INSTALLED/Contents/Resources/python" >/dev/null 2>&1 &&
+  fail 'после обновления остался сервер прежней копии'
+[ -d "$INSTALLED" ] || fail 'после обновления нет /Applications/LogAtlas.app'
+echo '   работающая копия закрыта, программа обновлена'
+
+sudo rm -rf "$INSTALLED"
+sudo pkgutil --forget io.github.arsis-02.logatlas >/dev/null
+
 echo "Все проверки пройдены ($ARCH)"

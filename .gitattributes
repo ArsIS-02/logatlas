@@ -11,5 +11,6 @@
 *.bmp binary
 *.iss text eol=crlf
 *.xml text eol=crlf
+macos/pkg/*.xml text eol=lf
 windows/README-Windows.txt text eol=crlf
 *.icns binary
