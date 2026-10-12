@@ -9,8 +9,24 @@ ARCH=$(uname -m)
 DMG=dist/LogAtlas-$VERSION-macos-$ARCH.dmg
 export LOGATLAS_NO_DIALOGS=1
 DATA="$HOME/Library/Application Support/LogAtlas"
-step() { printf '\033[36m==> %s\033[0m\n' "$*"; }
-fail() { printf '\033[31mПРОВЕРКА НЕ ПРОЙДЕНА: %s\033[0m\n' "$*"; show_logs; exit 1; }
+STEP=
+step() { STEP=$*; printf '\033[36m==> %s\033[0m\n' "$*"; }
+# Отчёт о сбое кладём рядом с журналами программы: шаг «Журналы при сбое» в workflow печатает
+# всё из этой папки сам, поэтому причина видна, даже если смотреть только его.
+report() {
+  mkdir -p "$DATA" 2>/dev/null || return 0
+  {
+    echo "шаг: ${STEP:-—}"
+    echo "причина: $1"
+    echo "машина: $(uname -m), macOS $(sw_vers -productVersion 2>/dev/null || echo '?'), версия $VERSION"
+    if [ -s "${WORK:-}/installer.log" ]; then echo '--- вывод installer:'; tail -n 30 "${WORK}/installer.log"; fi
+    if [ -d "${EXP:-}" ]; then echo '--- состав пакета:'; find "$EXP" -maxdepth 3 -print 2>/dev/null | head -n 25; fi
+    echo "--- квитанции: $(pkgutil --pkgs 2>/dev/null | grep -i logatlas || echo 'нет')"
+    echo "--- /Applications/LogAtlas.app: $([ -d /Applications/LogAtlas.app ] && echo есть || echo нет)"
+    if [ -s "${WORK:-}/installed.log" ]; then echo '--- вывод установленной программы:'; tail -n 15 "${WORK}/installed.log"; fi
+  } > "$DATA/smoke-fail.log" 2>&1 || true
+}
+fail() { printf '\033[31mПРОВЕРКА НЕ ПРОЙДЕНА (%s): %s\033[0m\n' "${STEP:-—}" "$*"; report "$*"; show_logs; exit 1; }
 show_logs() { for f in "$DATA/window.log" "$DATA/logatlas.log"; do [ -f "$f" ] && { echo "---- $f"; tail -n 40 "$f"; }; done; true; }
 healthy() { curl -fs -m 2 "http://127.0.0.1:$1/healthz" >/dev/null 2>&1; }
 
