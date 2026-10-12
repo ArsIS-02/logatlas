@@ -18,7 +18,15 @@ case $ARCH in
   *) echo "неизвестная архитектура: $ARCH" >&2; exit 1 ;;
 esac
 PYVER=${LOGATLAS_PYTHON:-3.12}
-step() { printf '\033[36m==> %s\033[0m\n' "$*"; }
+STEP=
+step() { STEP=$*; printf '\033[36m==> %s\033[0m\n' "$*"; }
+# При сбое пишем сообщение-аннотацию: GitHub показывает такие вверху страницы запуска,
+# и причина видна, не разворачивая шаги.
+on_error() {
+  [ -n "${GITHUB_ACTIONS:-}" ] || return 0
+  printf '::error title=Сборка macOS %s::шаг «%s» завершился с ошибкой\n' "$ARCH" "${STEP:-начало}"
+}
+trap on_error ERR
 
 BUILD=$REPO/build/macos-$ARCH
 DIST=$REPO/dist

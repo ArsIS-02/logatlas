@@ -26,7 +26,21 @@ report() {
     if [ -s "${WORK:-}/installed.log" ]; then echo '--- вывод установленной программы:'; tail -n 15 "${WORK}/installed.log"; fi
   } > "$DATA/smoke-fail.log" 2>&1 || true
 }
-fail() { printf '\033[31mПРОВЕРКА НЕ ПРОЙДЕНА (%s): %s\033[0m\n' "${STEP:-—}" "$*"; report "$*"; show_logs; exit 1; }
+# Сообщение-аннотация с причиной и отчётом: GitHub показывает такие вверху страницы запуска.
+annotate() {
+  [ -n "${GITHUB_ACTIONS:-}" ] || return 0
+  body=$(sed 's/%/%25/g; s/\r//g' "$DATA/smoke-fail.log" 2>/dev/null | head -n 40 |
+         awk '{ printf "%s%%0A", $0 }')
+  title=$(printf '%s' "${STEP:-проверка}" | tr ',' ' ')
+  printf '::error title=Проверка macOS %s — %s::%s\n' "$ARCH" "$title" "${body:-$1}"
+}
+fail() {
+  printf '\033[31mПРОВЕРКА НЕ ПРОЙДЕНА (%s): %s\033[0m\n' "${STEP:-—}" "$*"
+  report "$*"
+  annotate "$*"
+  show_logs
+  exit 1
+}
 show_logs() { for f in "$DATA/window.log" "$DATA/logatlas.log"; do [ -f "$f" ] && { echo "---- $f"; tail -n 40 "$f"; }; done; true; }
 healthy() { curl -fs -m 2 "http://127.0.0.1:$1/healthz" >/dev/null 2>&1; }
 
