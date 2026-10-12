@@ -38,7 +38,7 @@ jobs:
             echo "::error::Тег $GITHUB_REF_NAME стоит на коммите с VERSION = $v в app/main.py — перенесите тег на коммит этой версии"; exit 1
           fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
-          sw_vers; swiftc --version
+          sw_vers; swiftc --version; echo "Xcode: $(xcode-select -p), SDK $(xcrun --show-sdk-version 2>/dev/null || echo '?')"
 
       - name: Сборка
         env:

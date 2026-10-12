@@ -83,6 +83,7 @@ step 'байт-код'
 
 # --- окно (Swift + WebKit)
 step 'LogAtlas (Swift)'
+echo "   $(swiftc --version | head -n 1); SDK $(xcrun --show-sdk-version 2>/dev/null || echo '?'); $(xcode-select -p)"
 swiftc -O -target "$ARCH-apple-macos12.0" -o "$APP/Contents/MacOS/LogAtlas" macos/LogAtlas.swift
 sed "s/@VERSION@/$VERSION/g" macos/Info.plist > "$APP/Contents/Info.plist"
 # значок: AppIcon.icns (iconutil) и, если есть Xcode, каталог Assets.car (actool) — его берут новые macOS
@@ -116,9 +117,12 @@ step 'проверка модулей'
   cd /tmp
   LOGATLAS_DATA="$BUILD/check-data" PYTHONDONTWRITEBYTECODE=1 "$PY" -c "
 import sys; sys.path.insert(0, '$L')
-import app.main, app.sigma, app.net, app.mitre, starlette, uvicorn, multipart, yaml, ssl, importlib.util as u
+import os, app.main, app.sigma, app.net, app.mitre, starlette, uvicorn, multipart, yaml, ssl, importlib.util as u
 assert u.find_spec('evtx') or u.find_spec('Evtx'), 'evtx'
-assert app.net.ssl_context().cert_store_stats().get('x509_ca'), 'no CA certificates for HTTPS'
+ca = app.net.ssl_context().cert_store_stats()
+print('   корневых сертификатов:', ca.get('x509_ca'), '| certifi:', bool(u.find_spec('certifi')),
+      '| SSL_CERT_FILE:', os.environ.get('SSL_CERT_FILE', '-'))
+assert ca.get('x509_ca'), 'no CA certificates for HTTPS'
 import json; assert len(json.load(open(app.mitre.SNAPSHOT))['techniques']) > 500, 'mitre snapshot'
 print('modules ok, LogAtlas', app.main.VERSION, 'orjson' if u.find_spec('orjson') else 'json')"
 )

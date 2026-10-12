@@ -90,7 +90,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         web.uiDelegate = self
         web.allowsMagnification = true
         web.allowsBackForwardNavigationGestures = false
-        if #available(macOS 13.3, *) { web.isInspectable = env["LOGATLAS_DEVTOOLS"] != nil }
+        // Инспектор веб-страницы — только когда задан LOGATLAS_DEVTOOLS. Свойство isInspectable есть
+        // в SDK macOS 13.3 и новее; обращаемся к нему по имени, чтобы программа собиралась и тем Xcode,
+        // который этого свойства ещё не знает (на сборочных машинах Intel он бывает старее).
+        if env["LOGATLAS_DEVTOOLS"] != nil, web.responds(to: Selector(("setInspectable:"))) {
+            web.setValue(true, forKey: "inspectable")
+        }
 
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1360, height: 860),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable],

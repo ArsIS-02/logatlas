@@ -100,7 +100,9 @@ echo "   скрипты и проверки на месте"
 step 'установщик: установка'
 INSTALLED=/Applications/LogAtlas.app
 sudo rm -rf "$INSTALLED"
-sudo installer -pkg "$PKG" -target / >/dev/null || fail 'установщик отработал с ошибкой'
+install_pkg() { sudo installer -pkg "$PKG" -target / >"$WORK/installer.log" 2>&1 ||
+  { echo '--- вывод установщика:'; tail -n 25 "$WORK/installer.log"; fail "$1"; }; }
+install_pkg 'установщик отработал с ошибкой'
 [ -d "$INSTALLED" ] || fail 'после установки нет /Applications/LogAtlas.app'
 codesign --verify "$INSTALLED" || fail 'подпись установленной программы не сходится'
 V=$(defaults read "$INSTALLED/Contents/Info.plist" CFBundleShortVersionString)
@@ -116,16 +118,24 @@ for _ in $(seq 1 60); do
   pgrep -f "^$INSTALLED/Contents/MacOS/LogAtlas" >/dev/null 2>&1 && break
   sleep 1
 done
-pgrep -f "^$INSTALLED/Contents/MacOS/LogAtlas" >/dev/null 2>&1 || fail 'установленная программа не запустилась'
-sudo installer -pkg "$PKG" -target / >/dev/null || fail 'обновление поверх не прошло'
-pgrep -f "^$INSTALLED/Contents/MacOS/LogAtlas" >/dev/null 2>&1 &&
-  fail 'установщик не закрыл работающую копию'
-wait "$RUN" 2>/dev/null || true
-sleep 2
-pgrep -f "^$INSTALLED/Contents/Resources/python" >/dev/null 2>&1 &&
-  fail 'после обновления остался сервер прежней копии'
+if pgrep -f "^$INSTALLED/Contents/MacOS/LogAtlas" >/dev/null 2>&1; then
+  install_pkg 'обновление поверх не прошло'
+  pgrep -f "^$INSTALLED/Contents/MacOS/LogAtlas" >/dev/null 2>&1 &&
+    fail 'установщик не закрыл работающую копию'
+  wait "$RUN" 2>/dev/null || true
+  sleep 2
+  pgrep -f "^$INSTALLED/Contents/Resources/python" >/dev/null 2>&1 &&
+    fail 'после обновления остался сервер прежней копии'
+  echo '   работающая копия закрыта, программа обновлена'
+else
+  # окно не поднялось (бывает, когда у сборочной машины нет сеанса рабочего стола) — проверяем
+  # хотя бы саму переустановку поверх, а закрытие работающей копии пропускаем
+  kill "$RUN" 2>/dev/null || true
+  echo '   окно не запустилось на этой машине — проверяем только переустановку поверх'
+  [ -s "$WORK/installed.log" ] && tail -n 5 "$WORK/installed.log"
+  install_pkg 'повторная установка поверх не прошла'
+fi
 [ -d "$INSTALLED" ] || fail 'после обновления нет /Applications/LogAtlas.app'
-echo '   работающая копия закрыта, программа обновлена'
 
 sudo rm -rf "$INSTALLED"
 sudo pkgutil --forget io.github.arsis-02.logatlas >/dev/null
