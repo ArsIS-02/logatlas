@@ -1,13 +1,16 @@
 ﻿; LogAtlas для Windows — установщик (Inno Setup 6.3+).
-; Собирается в .github/workflows/windows.yml: ISCC /DAppVer=1.4.0 /DSrc=<папка сборки> windows\logatlas.iss
-; Папка сборки: LogAtlas.exe, launcher.pyw, logatlas.ico, python\ (встроенный Python с зависимостями),
+; Собирается windows\build.ps1: ISCC /DAppVer=1.4.0 /DArch=x64|arm64 /DSrc=<папка сборки> windows\logatlas.iss
+; Папка сборки: LogAtlas.exe (окно), launcher.pyw, logatlas.ico, python\ (встроенный Python с зависимостями),
 ; app\, static\, scripts\, service\ (WinSW + service.ps1), install-service.cmd, uninstall-service.cmd.
 
 #ifndef AppVer
   #define AppVer "1.4.0"
 #endif
+#ifndef Arch
+  #define Arch "x64"
+#endif
 #ifndef Src
-  #define Src "..\dist\LogAtlas"
+  #define Src "..\dist\LogAtlas-" + Arch
 #endif
 
 [Setup]
@@ -26,15 +29,20 @@ DisableProgramGroupPage=yes
 ; «Для всех пользователей» (нужны права администратора, можно поставить службу) или «Только для меня»
 PrivilegesRequired=admin
 PrivilegesRequiredOverridesAllowed=dialog
+#if Arch == "arm64"
+ArchitecturesAllowed=arm64
+ArchitecturesInstallIn64BitMode=arm64
+#else
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
+#endif
 ; Windows 10 1809 и новее: там есть встроенный клиент OpenSSH для сбора с хостов
 MinVersion=10.0.17763
 OutputDir=..\dist
-OutputBaseFilename=LogAtlas-Setup-{#AppVer}-x64
+OutputBaseFilename=LogAtlas-Setup-{#AppVer}-{#Arch}
 SetupIconFile=logatlas.ico
 UninstallDisplayIcon={app}\LogAtlas.exe
-UninstallDisplayName=LogAtlas {#AppVer}
+UninstallDisplayName=LogAtlas {#AppVer} ({#Arch})
 WizardStyle=modern
 WizardSmallImageFile=wizard-small.bmp,wizard-small-2x.bmp
 LicenseFile=..\LICENSE
@@ -49,7 +57,6 @@ Name: "ru"; MessagesFile: "compiler:Languages\Russian.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "Значок на рабочем столе"
-Name: "autostart"; Description: "Запускать LogAtlas при входе в Windows (значок в области уведомлений)"; Flags: unchecked
 Name: "service"; Description: "Установить как службу Windows: панель работает без входа пользователя и открывается с других компьютеров локальной сети (порт 8484)"; Flags: unchecked; Check: IsAdminInstallMode
 
 [Files]
@@ -59,9 +66,6 @@ Source: "{#Src}\*"; DestDir: "{app}"; Excludes: "portable.txt,data"; Flags: igno
 Name: "{autoprograms}\LogAtlas"; Filename: "{app}\LogAtlas.exe"; WorkingDir: "{app}"; Comment: "Анализатор журналов macOS, Windows и Linux"
 Name: "{autoprograms}\LogAtlas — сборщик журналов Windows"; Filename: "{app}\scripts\collect-windows-gui.cmd"; WorkingDir: "{app}\scripts"; IconFilename: "{sys}\eventvwr.exe"; Comment: "Выгрузить журналы событий этого компьютера в zip-архив"
 Name: "{autodesktop}\LogAtlas"; Filename: "{app}\LogAtlas.exe"; WorkingDir: "{app}"; Tasks: desktopicon
-
-[Registry]
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "LogAtlas"; ValueData: """{app}\LogAtlas.exe"" --autostart"; Flags: uninsdeletevalue; Tasks: autostart
 
 [Run]
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\service\service.ps1"" -Action install -Quiet"; StatusMsg: "Установка и запуск службы LogAtlas…"; Flags: runhidden waituntilterminated; Tasks: service
@@ -73,6 +77,7 @@ Type: filesandordirs; Name: "{app}\python"
 Type: filesandordirs; Name: "{app}\static"
 Type: filesandordirs; Name: "{app}\scripts"
 Type: files; Name: "{app}\service\*.log"
+Type: files; Name: "{app}\*.dll"
 Type: dirifempty; Name: "{app}\service"
 Type: dirifempty; Name: "{app}"
 

@@ -38,6 +38,7 @@ LOG_HINT = {
     "windows-app": "журнал приложения: %LOCALAPPDATA%\\LogAtlas\\logatlas.log",
     "windows-portable": "журнал приложения: data\\logatlas.log рядом с LogAtlas.exe",
     "windows-service": "журнал службы: %ProgramData%\\LogAtlas\\logs",
+    "macos-app": "журнал приложения: ~/Library/Application Support/LogAtlas/logatlas.log",
 }.get(RUNTIME, "вывод uvicorn в консоли")
 
 
@@ -584,6 +585,18 @@ def local_collect_status(req):
     return J(j) if j else _err("Задание не найдено", 404)
 
 
+def status(req):
+    """Занята ли панель: окно LogAtlas для Windows спрашивает перед закрытием, если идёт разбор или сбор."""
+    w = ingest.WORKER
+    cur = w.current if w else None
+    queued = w.q.qsize() if w else 0
+    collecting = sum(1 for p in list(collect.JOBS.values()) if p.poll() is None)
+    local = sum(1 for j in list(winlocal.JOBS.values()) if j["state"] in ("starting", "waiting", "collecting"))
+    case = (db.get_case(cur) or {}).get("name", "") if cur else ""
+    return J({"busy": bool(cur or queued or collecting or local), "case": case, "queued": queued,
+              "collecting": collecting, "local": local})
+
+
 def health(req):
     return Response("ok")
 
@@ -591,6 +604,7 @@ def health(req):
 routes = [
     Route("/", index),
     Route("/healthz", health),
+    Route("/api/status", status),
     Route("/favicon.ico", lambda r: _icon("icons/favicon.ico", "image/x-icon")),
     Route("/apple-touch-icon.png", lambda r: _icon("icons/apple-touch-icon.png", "image/png")),
     Route("/apple-touch-icon-precomposed.png", lambda r: _icon("icons/apple-touch-icon.png", "image/png")),

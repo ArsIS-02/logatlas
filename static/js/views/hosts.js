@@ -74,8 +74,8 @@ export async function renderHosts(view) {
   };
 
   mount(view, h`
-    ${!info.available && RT.runtime.startsWith('windows') ? h`<div class="note err">Сбор с хостов недоступен. ${info.unavailable}</div>` : ''}
-    ${!info.available && !RT.runtime.startsWith('windows') ? h`<div class="note err">В контейнере нет клиента SSH или ключа панели — сбор с хостов недоступен. Пересоберите образ: <span class="mono">docker compose up -d --build</span>.</div>` : ''}
+    ${!info.available && RT.runtime !== 'docker' && RT.runtime !== 'python' ? h`<div class="note err">Сбор с хостов недоступен. ${info.unavailable}</div>` : ''}
+    ${!info.available && (RT.runtime === 'docker' || RT.runtime === 'python') ? h`<div class="note err">В контейнере нет клиента SSH или ключа панели — сбор с хостов недоступен. Пересоберите образ: <span class="mono">docker compose up -d --build</span>.</div>` : ''}
     <section class="panel">
       <div class="panel-h"><h2>Хосты</h2><div class="tools"><button class="btn primary small" type="button" id="h-add">+ Хост</button></div></div>
       <div id="h-form" class="hidden"></div>
@@ -101,7 +101,7 @@ export async function renderHosts(view) {
         <div class="setup-os">
           <h3>${raw(platIcon('linux'))} Linux и ${raw(platIcon('macos'))} macOS</h3>
           <p class="muted small-t">В терминале хоста, под пользователем с правом sudo. Создаётся системный пользователь <span class="mono">${info.user}</span> без пароля:</p>
-          ${info.local_only ? h`<p class="muted small-t">Панель открыта только на этом компьютере, поэтому хост не скачает скрипт по ссылке. Скачайте его: <a class="btn small" href="/setup/host.sh" download="logatlas-host-setup.sh">logatlas-host-setup.sh</a>, перенесите на хост (например, <span class="mono">scp logatlas-host-setup.sh пользователь@хост:</span>) и выполните там <span class="mono">sudo bash logatlas-host-setup.sh</span>. Либо откройте панель для сети: <span class="mono">"host": "0.0.0.0"</span> в settings.json или служба Windows.</p>`
+          ${info.local_only ? h`<p class="muted small-t">Панель открыта только на этом компьютере, поэтому хост не скачает скрипт по ссылке. Скачайте его: <a class="btn small" href="/setup/host.sh" download="logatlas-host-setup.sh">logatlas-host-setup.sh</a>, перенесите на хост (например, <span class="mono">scp logatlas-host-setup.sh пользователь@хост:</span>) и выполните там <span class="mono">sudo bash logatlas-host-setup.sh</span>. Либо откройте панель для сети: <span class="mono">"host": "0.0.0.0"</span> в settings.json в папке данных${RT.runtime.startsWith('windows') ? ' или служба Windows' : ''}.</p>`
     : h`<div class="cmdline"><code>${info.commands.unix}</code>${copyBtn(info.commands.unix)}</div>`}
           <p class="muted small-t">На macOS заранее включите «Удалённый вход»: Системные настройки → Основные → Общий доступ.</p>
         </div>

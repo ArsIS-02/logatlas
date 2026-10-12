@@ -46,8 +46,13 @@ JOBS: dict[str, subprocess.Popen] = {}
 WINDOWS = os.name == "nt"
 # На Windows консольные программы (ssh, icacls) запускаются без всплывающего окна консоли
 NOWIN = {"creationflags": 0x08000000} if WINDOWS else {}   # CREATE_NO_WINDOW
-NO_SSH = ("Не найден клиент OpenSSH. Windows: Параметры → Приложения → Дополнительные компоненты → "
-          "«Клиент OpenSSH»." if WINDOWS else "В контейнере нет ssh или ключа панели — пересоберите образ LogAtlas")
+if WINDOWS:
+    NO_SSH = ("Не найден клиент OpenSSH. Windows: Параметры → Приложения → Дополнительные компоненты → "
+              "«Клиент OpenSSH».")
+elif os.environ.get("LOGATLAS_RUNTIME", "").startswith("macos"):
+    NO_SSH = "Не найден ssh или ключ панели не создан — подробности в журнале приложения."
+else:
+    NO_SSH = "В контейнере нет ssh или ключа панели — пересоберите образ LogAtlas"
 
 
 def _tool(name: str) -> str | None:

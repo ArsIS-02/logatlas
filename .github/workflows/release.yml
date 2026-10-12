@@ -102,12 +102,19 @@ jobs:
           Без доступа к реестру: скачайте архив под свою архитектуру ниже и выполните
           \`docker load -i $NAME-$V-linux-amd64.tar.gz\` (или \`…-arm64.tar.gz\`).
 
-          ## Windows (x64) без Docker
+          ## Windows без Docker (x64 и ARM64)
 
-          - \`LogAtlas-Setup-$V-x64.exe\` — установщик: ярлыки, значок в области уведомлений, по желанию — служба Windows;
-          - \`LogAtlas-$V-portable-x64.zip\` — переносная версия: распакуйте и запустите \`LogAtlas.exe\`.
+          Оконное приложение со встроенным Python — выберите файлы под свой процессор (\`x64\` — Intel/AMD, \`arm64\` — Snapdragon и другие ARM):
 
-          Файлы для Windows появятся в релизе через несколько минут после публикации (их собирает отдельный workflow).
+          - \`LogAtlas-Setup-$V-x64.exe\` / \`LogAtlas-Setup-$V-arm64.exe\` — установщик: ярлыки, по желанию — служба Windows;
+          - \`LogAtlas-$V-portable-x64.zip\` / \`LogAtlas-$V-portable-arm64.zip\` — переносная версия: распакуйте и запустите \`LogAtlas.exe\`.
+
+          ## macOS без Docker (Apple Silicon и Intel)
+
+          - \`LogAtlas-$V-macos-arm64.dmg\` — Mac на M1–M4; \`LogAtlas-$V-macos-x86_64.dmg\` — Mac на Intel (macOS 12+).
+            Перетащите LogAtlas в «Программы»; при первом запуске — «Системные настройки → Конфиденциальность и безопасность → Всё равно открыть».
+
+          Файлы для Windows и macOS появятся в релизе через несколько минут после публикации (их собирают отдельные workflow).
           EOF
           gh release create "$GITHUB_REF_NAME" --title "LogAtlas $V" --notes-file notes.md --generate-notes \
             "$NAME-$V-linux-amd64.tar.gz" "$NAME-$V-linux-arm64.tar.gz"

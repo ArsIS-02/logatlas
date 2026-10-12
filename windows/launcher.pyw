@@ -1,8 +1,13 @@
-"""LogAtlas для Windows: запуск панели без Docker.
+"""LogAtlas без Docker: сервер для окна LogAtlas (Windows и macOS) и служба Windows.
+
+Обычно этот файл запускает окно: LogAtlas.exe (windows/LogAtlas.cpp) или LogAtlas.app (macos/LogAtlas.swift)
+с параметром --window. На macOS данные — ~/Library/Application Support/LogAtlas, окно узнаёт порт из
+стандартного вывода, а закрытие окна (конец стандартного ввода) завершает сервер.
 
 Режимы:
-  (без параметров)  приложение: панель на 127.0.0.1, значок в области уведомлений, браузер открывается сам;
-                    данные — %LOCALAPPDATA%\\LogAtlas (или .\\data, если рядом лежит portable.txt)
+  --window          бэкенд окна LogAtlas: панель на 127.0.0.1, номер порта сообщается окну через канал
+                    LOGATLAS_HOST_PIPE; данные — %LOCALAPPDATA%\\LogAtlas (или .\\data, если рядом portable.txt)
+  (без параметров)  запасной режим без окна (нет WebView2): панель в браузере и значок в области уведомлений
   --autostart       то же при входе в Windows, но без открытия браузера
   --service         служба Windows (запускает WinSW): панель доступна из сети, данные — %ProgramData%\\LogAtlas
   --quit            закрыть запущенные приложения LogAtlas (нужно установщику при обновлении)
@@ -36,6 +41,8 @@ if sys.stdout is None or sys.stderr is None:
     sys.stderr = sys.stderr or _null
 
 APP = "LogAtlas"
+WINDOWS = os.name == "nt"
+MACOS = sys.platform == "darwin"
 DEFAULT_PORT = 8484
 CREATE_NO_WINDOW = 0x08000000
 CREATE_BREAKAWAY_FROM_JOB = 0x01000000
@@ -57,6 +64,8 @@ def data_dir(mode: str) -> str:
         return os.path.join(base, APP)
     if portable():
         return os.path.join(ROOT, "data")
+    if MACOS:
+        return os.path.join(os.path.expanduser("~"), "Library", "Application Support", APP)
     base = os.environ.get("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), "AppData", "Local")
     return os.path.join(base, APP)
 
@@ -120,9 +129,23 @@ def _kernel32():
     return k
 
 
+_lock_fd = None
+
+
 def single_instance(ddir: str):
     """Мьютекс на папку данных: установленное и переносное приложения могут работать одновременно,
-    а второй запуск того же приложения только открывает браузер."""
+    а второй запуск того же приложения только открывает браузер. На macOS — блокировка файла."""
+    if not WINDOWS:
+        import fcntl
+        global _lock_fd
+        fd = os.open(os.path.join(ddir, ".instance.lock"), os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            os.close(fd)
+            return None
+        _lock_fd = fd
+        return fd
     import ctypes
     import hashlib
     k = _kernel32()
@@ -289,14 +312,18 @@ def prepare_env(ddir: str, mode: str, settings: dict):
     os.environ["LOGATLAS_DATA"] = ddir
     os.environ["LOGATLAS_BIND"] = str(settings.get("host") or "")
     os.environ.setdefault("LOGATLAS_INBOX", os.path.join(ddir, "inbox"))
-    os.environ["LOGATLAS_RUNTIME"] = {"service": "windows-service"}.get(mode, "windows-portable" if portable() else "windows-app")
-    if mode != "service":
+    if MACOS:
+        os.environ["LOGATLAS_RUNTIME"] = "macos-app"
+    else:
+        os.environ["LOGATLAS_RUNTIME"] = {"service": "windows-service"}.get(
+            mode, "windows-portable" if portable() else "windows-app")
+    if mode != "service" and WINDOWS:
         os.environ["LOGATLAS_DESKTOP"] = "1"
     if settings.get("workers"):
         os.environ["LOGATLAS_WORKERS"] = str(settings["workers"])
     tmp = os.path.join(ddir, "tmp")
     os.makedirs(tmp, exist_ok=True)
-    os.environ["TMP"] = os.environ["TEMP"] = tmp
+    os.environ["TMP"] = os.environ["TEMP"] = os.environ["TMPDIR"] = tmp
 
 
 # ---------------------------------------------------------------------------
@@ -325,6 +352,9 @@ def service_url() -> str | None:
 
 
 def message_box(text: str, title: str = APP, icon: int = 0x10):
+    if os.environ.get("LOGATLAS_NO_DIALOGS") or not WINDOWS:   # проверки или macOS: окно покажет LogAtlas.app
+        log.error("%s", text)
+        return
     try:
         import ctypes
         ctypes.windll.user32.MessageBoxW(None, text, title, icon)
@@ -457,6 +487,118 @@ def tray(url: str, ddir: str, server, th):
     shutdown(server, th)
 
 
+# ---------------------------------------------------------------------------
+# бэкенд окна LogAtlas.exe
+_host_fd = None
+
+
+def host_say(line: str):
+    """Строка для окна: LOGATLAS-READY <порт> <app|service|existing> или LOGATLAS-ERROR <текст>.
+    Окно передаёт свой конец канала через LOGATLAS_HOST_PIPE (номер наследуемого дескриптора)."""
+    global _host_fd
+    h = os.environ.get("LOGATLAS_HOST_PIPE")
+    if not h:
+        print(line, flush=True)
+        return
+    try:
+        if _host_fd is None:
+            import msvcrt
+            _host_fd = msvcrt.open_osfhandle(int(h), os.O_WRONLY)
+        os.write(_host_fd, (line + "\n").encode("utf-8"))
+    except (OSError, ValueError) as e:
+        log.warning("окно не получило «%s»: %s", line, e)
+
+
+def watch_host_exit(on_exit):
+    """macOS: окно держит стандартный ввод сервера открытым; конец ввода (окно закрыли или оно упало)
+    или смена родителя — сигнал завершиться."""
+    ppid = os.getppid()
+
+    def stdin_eof():
+        try:
+            while sys.stdin and sys.stdin.buffer.read(4096):
+                pass
+        except (OSError, ValueError):
+            pass
+        log.info("окно закрыто (конец стандартного ввода)")
+        on_exit()
+
+    def parent_gone():
+        while os.getppid() == ppid:
+            time.sleep(1)
+        log.info("окно завершилось")
+        on_exit()
+
+    threading.Thread(target=stdin_eof, daemon=True, name="host-stdin").start()
+    threading.Thread(target=parent_gone, daemon=True, name="host-parent").start()
+
+
+def stop_workers():
+    """Завершить процессы-воркеры разбора (на Windows это делает объект задания)."""
+    import multiprocessing
+    for p in multiprocessing.active_children():
+        try:
+            p.kill()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def run_window(force_app: bool):
+    if WINDOWS and not portable() and not force_app:
+        inst = read_instance(data_dir("service"))
+        if inst and inst.get("mode") == "service" and healthy(int(inst.get("port") or 0)):
+            host_say(f"LOGATLAS-READY {int(inst['port'])} service")
+            return
+
+    ddir = data_dir("app")
+    os.makedirs(ddir, exist_ok=True)
+    setup_logging(ddir, "app")
+    if single_instance(ddir) is None:   # работает запасной режим со значком — окно подключается к нему
+        inst = read_instance(ddir)
+        for _ in range(30):
+            if inst and healthy(int(inst.get("port") or 0)):
+                host_say(f"LOGATLAS-READY {int(inst['port'])} existing")
+                return
+            time.sleep(0.5)
+            inst = read_instance(ddir)
+        host_say("LOGATLAS-ERROR LogAtlas с этой папкой данных уже запущен, но не отвечает. " +
+                 ("Закройте его (LogAtlas.exe --quit) и запустите снова." if WINDOWS else
+                  "Завершите его в Мониторе активности и запустите снова."))
+        return
+
+    settings = load_settings(ddir, "app")
+    prepare_env(ddir, "app", settings)
+    job = kill_children_with_me() if WINDOWS else None  # noqa: F841
+    try:
+        port = pick_port(settings["host"], settings["port"])
+    except RuntimeError as e:
+        host_say(f"LOGATLAS-ERROR {e}")
+        return
+    log.info("LogAtlas (окно%s): http://127.0.0.1:%s, данные: %s", ", переносной" if portable() else "", port, ddir)
+    server = make_server(settings["host"], port)
+    th = threading.Thread(target=server.run, daemon=True, name="uvicorn")
+    th.start()
+    for _ in range(600):
+        if server.started or not th.is_alive():
+            break
+        time.sleep(0.1)
+    if not server.started:
+        host_say("LOGATLAS-ERROR Панель не запустилась. Подробности — в журнале: " + os.path.join(ddir, "logatlas.log"))
+        return
+    write_instance(ddir, port, "app")
+    host_say(f"LOGATLAS-READY {port} app")
+    stop = lambda: setattr(server, "should_exit", True)  # noqa: E731
+    if WINDOWS:
+        watch_quit(stop)                    # установщик просит закрыться
+    else:
+        watch_host_exit(stop)
+    th.join()
+    log.info("выход")
+    stop_workers()
+    logging.shutdown()
+    os._exit(0)
+
+
 def shutdown(server, th):
     log.info("выход")
     server.should_exit = True
@@ -473,6 +615,13 @@ def main():
         return
     if "--service" in args:
         run_service()
+        return
+    if "--window" in args:
+        try:
+            run_window(force_app="--app" in args)
+        except Exception as e:  # noqa: BLE001
+            log.exception("сбой запуска")
+            host_say(f"LOGATLAS-ERROR LogAtlas не запустился: {e}")
         return
     try:
         run_app(autostart="--autostart" in args, force_app="--app" in args)

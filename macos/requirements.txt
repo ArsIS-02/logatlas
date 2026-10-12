@@ -1,0 +1,6 @@
+# Зависимости LogAtlas для macOS (ставятся во встроенный Python приложения, см. macos/build.sh)
+starlette>=0.40,<2
+uvicorn>=0.30,<1
+python-multipart>=0.0.9
+orjson>=3.10
+evtx

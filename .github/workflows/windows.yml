@@ -1,6 +1,7 @@
-# LogAtlas для Windows (x64): установщик, переносной zip и служба.
-# Собирает и проверяет на чистой Windows при каждом изменении; готовые файлы — в артефактах запуска
-# (Actions → Windows → Artifacts). При теге vX.Y.Z прикладывает их к релизу, который создаёт release.yml.
+# LogAtlas для Windows (x64 и ARM64): окно на WebView2, установщик, переносной zip и служба.
+# Собирает и проверяет на чистой Windows каждой архитектуры при каждом изменении; готовые файлы — в
+# артефактах запуска (Actions → Windows → Artifacts). При теге vX.Y.Z прикладывает их к релизу,
+# который создаёт release.yml.
 name: Windows
 
 on:
@@ -18,8 +19,17 @@ env:
 
 jobs:
   windows:
-    runs-on: windows-latest
+    name: windows-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-latest
+          - arch: arm64
+            runner: windows-11-arm
     defaults:
       run:
         shell: pwsh
@@ -29,11 +39,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          architecture: x64
+          architecture: ${{ matrix.arch }}
 
       - uses: ilammy/msvc-dev-cmd@v1
         with:
-          arch: x64
+          arch: ${{ matrix.arch }}
 
       - name: Версия
         id: ver
@@ -47,30 +57,37 @@ jobs:
 
       - name: Inno Setup
         run: |
-          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
+          $iscc = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe") | Where-Object { Test-Path $_ }
+          if ($iscc) { Write-Host "есть: $iscc"; exit 0 }
+          if (Get-Command choco -ErrorAction SilentlyContinue) { choco install innosetup -y --no-progress }
+          $iscc = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe") | Where-Object { Test-Path $_ }
+          if (-not $iscc) {
+            Invoke-WebRequest -UseBasicParsing -Uri 'https://jrsoftware.org/download.php/is.exe' -OutFile "$env:RUNNER_TEMP\is.exe"
+            Start-Process "$env:RUNNER_TEMP\is.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/ALLUSERS' -Wait
+          }
 
       - name: Сборка
-        run: ./windows/build.ps1 -Version ${{ steps.ver.outputs.version }}
+        run: ./windows/build.ps1 -Arch ${{ matrix.arch }} -Version ${{ steps.ver.outputs.version }}
 
       # файлы выкладываются до проверок: их можно скачать и попробовать, даже если проверка упадёт;
       # в релиз по тегу они попадают только после успешной проверки
       - uses: actions/upload-artifact@v4
         with:
-          name: LogAtlas-${{ steps.ver.outputs.version }}-windows-x64
+          name: LogAtlas-${{ steps.ver.outputs.version }}-windows-${{ matrix.arch }}
           path: |
-            dist/LogAtlas-Setup-*.exe
-            dist/LogAtlas-*-portable-x64.zip
-            dist/SHA256SUMS-windows.txt
+            dist/LogAtlas-Setup-*-${{ matrix.arch }}.exe
+            dist/LogAtlas-*-portable-${{ matrix.arch }}.zip
+            dist/SHA256SUMS-windows-${{ matrix.arch }}.txt
           if-no-files-found: error
 
       - name: Проверка
-        run: ./windows/smoke.ps1 -Version ${{ steps.ver.outputs.version }}
+        run: ./windows/smoke.ps1 -Arch ${{ matrix.arch }} -Version ${{ steps.ver.outputs.version }}
 
       - name: Журналы при сбое
         if: failure()
         run: |
-          foreach ($d in "$env:LOCALAPPDATA\LogAtlas", "$env:ProgramData\LogAtlas\logs") {
-            Get-ChildItem $d -Filter *.log -ErrorAction SilentlyContinue | ForEach-Object { "---- $($_.FullName)"; Get-Content $_.FullName -Tail 60 }
+          foreach ($d in "$env:LOCALAPPDATA\LogAtlas", "$env:ProgramData\LogAtlas\logs", "$env:RUNNER_TEMP\logatlas-smoke") {
+            Get-ChildItem $d -Recurse -Include *.log -ErrorAction SilentlyContinue | ForEach-Object { "---- $($_.FullName)"; Get-Content $_.FullName -Tail 60 }
           }
 
       - name: В релиз
@@ -85,5 +102,5 @@ jobs:
             Start-Sleep -Seconds 30
           }
           if ($LASTEXITCODE -ne 0) { throw "Релиз $env:GITHUB_REF_NAME так и не появился" }
-          $files = @(Get-ChildItem dist -File | Where-Object { $_.Name -like 'LogAtlas-*' -or $_.Name -eq 'SHA256SUMS-windows.txt' } | ForEach-Object FullName)
+          $files = @(Get-ChildItem dist -File | Where-Object { $_.Name -like "LogAtlas-*-${{ matrix.arch }}.*" -or $_.Name -eq 'SHA256SUMS-windows-${{ matrix.arch }}.txt' } | ForEach-Object FullName)
           gh release upload $env:GITHUB_REF_NAME @files --clobber

@@ -1,15 +1,13 @@
-// Значок и сведения о версии для LogAtlas.exe (VERSION_* подставляет сборка, см. .github/workflows/windows.yml)
+// Ресурсы LogAtlas.exe: значок, манифест (DPI, стили окон), сведения о версии
 #include <winver.h>
-#ifndef VERSION_NUM
-#define VERSION_NUM 1,4,0,0
-#define VERSION_STR "1.4.0"
-#endif
+#include "version.h"
 
 1 ICON "logatlas.ico"
+1 24 "LogAtlas.manifest"
 
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION VERSION_NUM
-PRODUCTVERSION VERSION_NUM
+FILEVERSION LOGATLAS_VERSION_NUM
+PRODUCTVERSION LOGATLAS_VERSION_NUM
 FILEOS VOS_NT_WINDOWS32
 FILETYPE VFT_APP
 BEGIN
@@ -19,12 +17,12 @@ BEGIN
     BEGIN
       VALUE "CompanyName", "ArsIS-02"
       VALUE "FileDescription", "LogAtlas"
-      VALUE "FileVersion", VERSION_STR
+      VALUE "FileVersion", LOGATLAS_VERSION_STR
       VALUE "InternalName", "LogAtlas"
       VALUE "LegalCopyright", "MIT License"
       VALUE "OriginalFilename", "LogAtlas.exe"
       VALUE "ProductName", "LogAtlas"
-      VALUE "ProductVersion", VERSION_STR
+      VALUE "ProductVersion", LOGATLAS_VERSION_STR
     END
   END
   BLOCK "VarFileInfo"

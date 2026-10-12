@@ -1,0 +1,74 @@
+# LogAtlas для macOS (Apple Silicon и Intel): окно на WebKit со встроенным Python, образ диска .dmg.
+# Собирает и проверяет на macOS каждой архитектуры при каждом изменении; готовые файлы — в артефактах
+# запуска (Actions → macOS → Artifacts). При теге vX.Y.Z прикладывает их к релизу, который создаёт release.yml.
+name: macOS
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    name: macos-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+          - arch: x86_64
+            runner: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Версия
+        id: ver
+        run: |
+          test "$(uname -m)" = "${{ matrix.arch }}" || { echo "сборочная машина $(uname -m), а нужна ${{ matrix.arch }}"; exit 1; }
+          v=$(sed -n 's/^VERSION = "\(.*\)"/\1/p' app/main.py)
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "${GITHUB_REF_NAME#v}" != "$v" ]; then
+            echo "Тег $GITHUB_REF_NAME не совпадает с VERSION = $v в app/main.py"; exit 1
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          sw_vers; swiftc --version
+
+      - name: Сборка
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash macos/build.sh "${{ steps.ver.outputs.version }}"
+
+      # файлы выкладываются до проверок: их можно скачать и попробовать, даже если проверка упадёт;
+      # в релиз по тегу они попадают только после успешной проверки
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LogAtlas-${{ steps.ver.outputs.version }}-macos-${{ matrix.arch }}
+          path: |
+            dist/LogAtlas-*-macos-${{ matrix.arch }}.dmg
+            dist/SHA256SUMS-macos-${{ matrix.arch }}.txt
+          if-no-files-found: error
+
+      - name: Проверка
+        run: bash macos/smoke.sh "${{ steps.ver.outputs.version }}"
+
+      - name: Журналы при сбое
+        if: failure()
+        run: |
+          for f in "$HOME/Library/Application Support/LogAtlas"/*.log; do [ -f "$f" ] && { echo "---- $f"; tail -n 60 "$f"; }; done; true
+
+      - name: В релиз
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # релиз создаёт release.yml (образы Docker собираются дольше) — ждём его до 45 минут
+          for i in $(seq 1 90); do gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 && break; sleep 30; done
+          gh release view "$GITHUB_REF_NAME" >/dev/null
+          gh release upload "$GITHUB_REF_NAME" dist/LogAtlas-*-macos-${{ matrix.arch }}.dmg dist/SHA256SUMS-macos-${{ matrix.arch }}.txt --clobber

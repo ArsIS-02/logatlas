@@ -12,3 +12,4 @@
 *.iss text eol=crlf
 *.xml text eol=crlf
 windows/README-Windows.txt text eol=crlf
+*.icns binary

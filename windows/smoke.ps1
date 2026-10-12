@@ -1,12 +1,17 @@
 ﻿<#
 Проверка сборки LogAtlas для Windows (запускается в GitHub Actions после windows\build.ps1, нужны права
-администратора): переносной zip, установщик со службой, режим приложения, удаление.
+администратора): переносной zip с окном, установщик со службой, окно рядом со службой, удаление.
+Окна сообщений отключены переменной LOGATLAS_NO_DIALOGS=1 — их некому закрыть.
 
 Файл сохранён в UTF-8 с BOM: без BOM Windows PowerShell 5.1 читает его как ANSI и ломает кириллицу.
 #>
-param([Parameter(Mandatory = $true)][string]$Version)
+param(
+  [Parameter(Mandatory = $true)][string]$Version,
+  [Parameter(Mandatory = $true)][ValidateSet('x64', 'arm64')][string]$Arch
+)
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
+$env:LOGATLAS_NO_DIALOGS = '1'
 $repo = Split-Path $PSScriptRoot -Parent
 $distRoot = Join-Path $repo 'dist'
 $demo = Join-Path $repo 'demo\windows-demo.zip'
@@ -17,7 +22,18 @@ New-Item -ItemType Directory -Force -Path $work | Out-Null
 function Step($t) { Write-Host "==> $t" -ForegroundColor Cyan }
 function Fail($t) { throw "ПРОВЕРКА НЕ ПРОЙДЕНА: $t" }
 
-function Wait-Instance($dataDir, $sec = 90) {
+function Show-Logs($dataDir) {
+  foreach ($n in 'window.log', 'logatlas.log') {
+    $f = Join-Path $dataDir $n
+    if (Test-Path $f) { Write-Host "---- $f"; Get-Content $f -Tail 40 | Write-Host }
+  }
+}
+
+function Test-Health($port) {
+  try { return (Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 -Uri "http://127.0.0.1:$port/healthz").StatusCode -eq 200 } catch { return $false }
+}
+
+function Wait-Instance($dataDir, $sec = 120) {
   $f = Join-Path $dataDir 'instance.json'
   for ($i = 0; $i -lt $sec; $i++) {
     if (Test-Path $f) {
@@ -26,13 +42,8 @@ function Wait-Instance($dataDir, $sec = 90) {
     }
     Start-Sleep -Seconds 1
   }
-  $log = Join-Path $dataDir 'logatlas.log'
-  if (Test-Path $log) { Get-Content $log -Tail 40 | Write-Host }
+  Show-Logs $dataDir
   Fail "панель не запустилась (нет ответа, $f)"
-}
-
-function Test-Health($port) {
-  try { return (Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 -Uri "http://127.0.0.1:$port/healthz").StatusCode -eq 200 } catch { return $false }
 }
 
 function Wait-Health($port, $sec = 90) {
@@ -62,41 +73,64 @@ function Test-Demo($port, $label) {
   Fail "разбор демо не закончился за 4 минуты ($label)"
 }
 
+function Get-Window($root) {
+  @(Get-Process LogAtlas -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($root, 'OrdinalIgnoreCase') })
+}
+
+function Test-Window($root, $dataDir) {
+  for ($i = 0; $i -lt 30; $i++) {
+    $w = Get-Window $root | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+    if ($w) { Write-Host ("   окно: «{0}»" -f $w.MainWindowTitle) -ForegroundColor Green; return $w }
+    Start-Sleep -Seconds 1
+  }
+  Show-Logs $dataDir
+  Fail 'окно LogAtlas не появилось'
+}
+
 function Wait-NoProcess($under, $sec = 30) {
   for ($i = 0; $i -lt $sec; $i++) {
-    $p = @(Get-Process python, pythonw -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($under, 'OrdinalIgnoreCase') })
+    $p = @(Get-Process python, pythonw, LogAtlas -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($under, 'OrdinalIgnoreCase') })
     if (-not $p) { return }
     Start-Sleep -Seconds 1
   }
-  Fail "процессы LogAtlas из $under не завершились: $($p.Id -join ', ')"
+  Fail "процессы LogAtlas из $under не завершились: $(($p | ForEach-Object { '{0}({1})' -f $_.ProcessName, $_.Id }) -join ', ')"
 }
 
-# ---------------------------------------------------------------- переносной zip
-Step 'переносной zip'
-$zip = Join-Path $distRoot "LogAtlas-$Version-portable-x64.zip"
+# ---------------------------------------------------------------- переносной zip: окно
+Step "переносной zip ($Arch)"
+$zip = Join-Path $distRoot "LogAtlas-$Version-portable-$Arch.zip"
 Expand-Archive -Path $zip -DestinationPath $work
-$proot = Join-Path $work "LogAtlas-$Version-portable-x64"
+$proot = Join-Path $work "LogAtlas-$Version-portable-$Arch"
+$pdata = Join-Path $proot 'data'
 if (-not (Test-Path (Join-Path $proot 'portable.txt'))) { Fail 'в zip нет portable.txt' }
 Start-Process -FilePath (Join-Path $proot 'LogAtlas.exe')
-$port = Wait-Instance (Join-Path $proot 'data')
+$port = Wait-Instance $pdata
+$win = Test-Window $proot $pdata
 $m = Get-Meta $port
 if ($m.runtime -ne 'windows-portable') { Fail "runtime = $($m.runtime)" }
 if (-not $m.local_collect) { Fail 'нет «Этот компьютер» в приложении' }
-if ($m.version -ne $Version) { Write-Host "   версия панели $($m.version), сборки $Version" -ForegroundColor Yellow }
 Test-Demo $port 'portable'
-Start-Process -FilePath (Join-Path $proot 'LogAtlas.exe') -ArgumentList '--quit' -Wait
+$st = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/status"
+if ($st.busy) { Fail 'после разбора панель всё ещё занята' }
+# второй запуск не открывает второе окно
+Start-Process -FilePath (Join-Path $proot 'LogAtlas.exe')
+Start-Sleep -Seconds 4
+if ((Get-Window $proot).Count -ne 1) { Fail 'второй запуск открыл второе окно' }
+# закрытие окна (как крестиком) завершает сервер и процессы разбора
+[void]$win.CloseMainWindow()
 Wait-NoProcess $proot
-Write-Host '   закрыт по --quit, воркеры разбора завершились' -ForegroundColor Green
+if (Test-Health $port) { Fail 'сервер работает после закрытия окна' }
+Write-Host '   окно закрыто, сервер и воркеры разбора завершились' -ForegroundColor Green
+Show-Logs $pdata
 
 # ---------------------------------------------------------------- установщик + служба
-Step 'установщик со службой'
-$setup = Join-Path $distRoot "LogAtlas-Setup-$Version-x64.exe"
+Step "установщик со службой ($Arch)"
+$setup = Join-Path $distRoot "LogAtlas-Setup-$Version-$Arch.exe"
 $inst = Join-Path $work 'Program Files\LogAtlas'
 $p = Start-Process -FilePath $setup -Wait -PassThru -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART',
   '/ALLUSERS', '/TASKS=service', "/DIR=`"$inst`"", "/LOG=`"$work\setup.log`"")
 if ($p.ExitCode -ne 0) { Get-Content "$work\setup.log" -Tail 40 | Write-Host; Fail "установщик: код $($p.ExitCode)" }
-$svc = Get-Service LogAtlas -ErrorAction SilentlyContinue
-if (-not $svc) { Get-Content "$work\setup.log" -Tail 40 | Write-Host; Fail 'служба не установлена' }
+if (-not (Get-Service LogAtlas -ErrorAction SilentlyContinue)) { Get-Content "$work\setup.log" -Tail 40 | Write-Host; Fail 'служба не установлена' }
 Wait-Health 8484 120
 if ((Get-Service LogAtlas).Status -ne 'Running') { Fail 'служба не запущена' }
 $m = Get-Meta 8484
@@ -115,17 +149,33 @@ if ($ci.available -and $ci.pubkey -like 'ssh-ed25519 *') {
 }
 if (-not (Get-NetFirewallRule -DisplayName 'LogAtlas' -ErrorAction SilentlyContinue)) { Fail 'нет правила брандмауэра' }
 
-# ---------------------------------------------------------------- режим приложения рядом со службой
-Step 'приложение (рядом со службой)'
-Start-Process -FilePath (Join-Path $inst 'LogAtlas.exe') -ArgumentList '--app'
-$port = Wait-Instance (Join-Path $env:LOCALAPPDATA 'LogAtlas')
-if ($port -eq 8484) { Fail 'приложение заняло порт службы' }
-$m = Get-Meta $port
-if ($m.runtime -ne 'windows-app') { Fail "runtime приложения = $($m.runtime)" }
-Write-Host "   приложение на порту $port" -ForegroundColor Green
-Start-Process -FilePath (Join-Path $inst 'LogAtlas.exe') -ArgumentList '--quit' -Wait
+# ---------------------------------------------------------------- окно подключается к службе
+Step 'окно при работающей службе'
+$adata = Join-Path $env:LOCALAPPDATA 'LogAtlas'
+Start-Process -FilePath (Join-Path $inst 'LogAtlas.exe')
+$win = Test-Window $inst $adata
 Start-Sleep -Seconds 3
-if (Test-Health $port) { Fail 'приложение не закрылось по --quit' }
+if (@(Get-Process pythonw -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($inst, 'OrdinalIgnoreCase') }).Count) {
+  Fail 'окно запустило свой сервер, хотя работает служба'
+}
+[void]$win.CloseMainWindow()
+Wait-NoProcess $inst
+if (-not (Test-Health 8484)) { Fail 'служба остановилась после закрытия окна' }
+Write-Host '   окно открыло службу и закрылось, служба работает' -ForegroundColor Green
+
+# ---------------------------------------------------------------- своё окно (--app) и закрытие по --quit
+Step 'окно со своим сервером (--app), закрытие по --quit'
+Start-Process -FilePath (Join-Path $inst 'LogAtlas.exe') -ArgumentList '--app'
+$port = Wait-Instance $adata
+if ($port -eq 8484) { Fail 'окно заняло порт службы' }
+[void](Test-Window $inst $adata)
+$m = Get-Meta $port
+if ($m.runtime -ne 'windows-app') { Fail "runtime окна = $($m.runtime)" }
+Start-Process -FilePath (Join-Path $inst 'LogAtlas.exe') -ArgumentList '--quit' -Wait
+for ($i = 0; $i -lt 20 -and (Get-Window $inst).Count; $i++) { Start-Sleep -Seconds 1 }
+if ((Get-Window $inst).Count) { Show-Logs $adata; Fail 'окно не закрылось по --quit' }
+if (-not (Test-Health 8484)) { Fail '--quit остановил службу' }
+Write-Host "   окно (порт $port) закрылось по --quit, служба работает" -ForegroundColor Green
 
 # ---------------------------------------------------------------- удаление
 Step 'удаление'
@@ -136,4 +186,4 @@ if (Test-Path (Join-Path $inst 'python')) { Fail 'файлы остались п
 if (Get-NetFirewallRule -DisplayName 'LogAtlas' -ErrorAction SilentlyContinue) { Fail 'правило брандмауэра осталось' }
 Wait-NoProcess $inst
 
-Write-Host 'Все проверки пройдены' -ForegroundColor Green
+Write-Host "Все проверки пройдены ($Arch)" -ForegroundColor Green
