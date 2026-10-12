@@ -84,7 +84,7 @@ docker run -d --name logatlas --restart unless-stopped \
   ghcr.io/arsis-02/logatlas:latest
 ```
 
-Откройте `http://<адрес-сервера>:8484`. Конкретная версия — тег вместо `latest` (например, `ghcr.io/arsis-02/logatlas:1.8.1`); обновление — `docker pull` и пересоздание контейнера. Для хостов без доступа к интернету к каждому [релизу](https://github.com/ArsIS-02/logatlas/releases) приложены архивы образов: `docker load -i logatlas-<версия>-linux-amd64.tar.gz`.
+Откройте `http://<адрес-сервера>:8484`. Конкретная версия — тег вместо `latest` (например, `ghcr.io/arsis-02/logatlas:1.8.2`); обновление — `docker pull` и пересоздание контейнера. Для хостов без доступа к интернету к каждому [релизу](https://github.com/ArsIS-02/logatlas/releases) приложены архивы образов: `docker load -i logatlas-<версия>-linux-amd64.tar.gz`.
 
 То же через Docker Compose — из клона репозитория:
 

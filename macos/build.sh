@@ -162,8 +162,9 @@ ditto "$APP" "$PKGROOT/Applications/LogAtlas.app"
 sed "s/@ARCH@/$ARCH/g" macos/pkg/preinstall > "$PKGSCRIPTS/preinstall"
 cp macos/pkg/postinstall "$PKGSCRIPTS/postinstall"
 chmod +x "$PKGSCRIPTS/preinstall" "$PKGSCRIPTS/postinstall"
+ARCH_RU=$([ "$ARCH" = arm64 ] && echo 'Apple Silicon (M1–M4)' || echo 'Intel')
 for f in welcome conclusion; do
-  sed "s/@VERSION@/$VERSION/g" "macos/pkg/$f.html" > "$PKGRES/$f.html"
+  sed -e "s/@VERSION@/$VERSION/g" -e "s/@ARCH_RU@/$ARCH_RU/g" "macos/pkg/$f.html" > "$PKGRES/$f.html"
 done
 sed -e "s/@VERSION@/$VERSION/g" -e "s/@ARCH@/$ARCH/g" macos/pkg/distribution.xml > "$BUILD/distribution.xml"
 pkgbuild --root "$PKGROOT" --identifier io.github.arsis-02.logatlas --version "$VERSION" \

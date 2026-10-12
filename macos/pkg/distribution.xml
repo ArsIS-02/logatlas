@@ -29,14 +29,10 @@ function logatlas_check() {
             'Скачайте LogAtlas-@VERSION@-macos-x86_64.pkg.';
         return false;
     }
-    if (!need_apple_silicon && apple_silicon) {
-        // сборка для Intel на Apple Silicon работает через Rosetta — предупреждаем, но не мешаем
-        my.result.type = 'Warn';
-        my.result.title = 'Есть сборка для вашего процессора';
-        my.result.message = 'Это сборка для Mac на Intel. Она заработает через Rosetta, но для Apple Silicon ' +
-            'есть отдельная: LogAtlas-@VERSION@-macos-arm64.pkg — она быстрее.';
-        return false;
-    }
+    // Сборку для Intel на Apple Silicon не трогаем: она работает через Rosetta. Предупреждение
+    // здесь делать нельзя — проверка умеет только разрешить или запретить, и даже мягкий отказ
+    // прерывает установку из командной строки (installer -pkg). Про выбор сборки сказано на
+    // первом экране установщика.
     return true;
 }
     ]]></script>
