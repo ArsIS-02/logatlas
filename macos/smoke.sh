@@ -26,6 +26,8 @@ APP=$MNT/LogAtlas.app
 [ -d "$APP" ] || fail 'в образе нет LogAtlas.app'
 [ -L "$MNT/Applications" ] || fail 'в образе нет ссылки на «Программы»'
 codesign --verify "$APP" || fail 'подпись приложения не сходится'
+[ -s "$APP/Contents/Resources/AppIcon.icns" ] || fail 'в приложении нет значка AppIcon.icns'
+[ -s "$APP/Contents/Resources/Assets.car" ] && echo '   значок: AppIcon.icns и Assets.car' || echo '   значок: AppIcon.icns'
 file "$APP/Contents/MacOS/LogAtlas" | grep -q "$ARCH" || fail "LogAtlas собран не под $ARCH"
 file -L "$APP/Contents/Resources/python/bin/python3" | grep -q "$ARCH" || fail "Python не под $ARCH"
 echo "   $(defaults read "$APP/Contents/Info.plist" CFBundleShortVersionString)"

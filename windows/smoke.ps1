@@ -87,9 +87,10 @@ function Test-Window($root, $dataDir) {
   Fail 'окно LogAtlas не появилось'
 }
 
-function Wait-NoProcess($under, $sec = 30) {
+# служба работает как python.exe из той же папки, окно и его сервер — LogAtlas.exe и pythonw.exe
+function Wait-NoProcess($under, $sec = 30, [string[]]$Names = @('python', 'pythonw', 'LogAtlas')) {
   for ($i = 0; $i -lt $sec; $i++) {
-    $p = @(Get-Process python, pythonw, LogAtlas -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($under, 'OrdinalIgnoreCase') })
+    $p = @(Get-Process $Names -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($under, 'OrdinalIgnoreCase') })
     if (-not $p) { return }
     Start-Sleep -Seconds 1
   }
@@ -159,7 +160,7 @@ if (@(Get-Process pythonw -ErrorAction SilentlyContinue | Where-Object { $_.Path
   Fail 'окно запустило свой сервер, хотя работает служба'
 }
 [void]$win.CloseMainWindow()
-Wait-NoProcess $inst
+Wait-NoProcess $inst -Names pythonw, LogAtlas
 if (-not (Test-Health 8484)) { Fail 'служба остановилась после закрытия окна' }
 Write-Host '   окно открыло службу и закрылось, служба работает' -ForegroundColor Green
 

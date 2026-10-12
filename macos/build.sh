@@ -85,7 +85,29 @@ step 'байт-код'
 step 'LogAtlas (Swift)'
 swiftc -O -target "$ARCH-apple-macos12.0" -o "$APP/Contents/MacOS/LogAtlas" macos/LogAtlas.swift
 sed "s/@VERSION@/$VERSION/g" macos/Info.plist > "$APP/Contents/Info.plist"
-cp macos/AppIcon.icns "$RES/AppIcon.icns"
+# значок: AppIcon.icns (iconutil) и, если есть Xcode, каталог Assets.car (actool) — его берут новые macOS
+ICONSET=$BUILD/AppIcon.iconset
+XCA=$BUILD/Assets.xcassets/AppIcon.appiconset
+mkdir -p "$ICONSET" "$XCA"
+IMAGES=
+for s in 16 32 128 256 512; do
+  sips -z "$s" "$s" macos/AppIcon.png --out "$ICONSET/icon_${s}x${s}.png" >/dev/null
+  sips -z $((s * 2)) $((s * 2)) macos/AppIcon.png --out "$ICONSET/icon_${s}x${s}@2x.png" >/dev/null
+  cp "$ICONSET/icon_${s}x${s}.png" "$ICONSET/icon_${s}x${s}@2x.png" "$XCA/"
+  IMAGES="$IMAGES{\"idiom\":\"mac\",\"size\":\"${s}x${s}\",\"scale\":\"1x\",\"filename\":\"icon_${s}x${s}.png\"},"
+  IMAGES="$IMAGES{\"idiom\":\"mac\",\"size\":\"${s}x${s}\",\"scale\":\"2x\",\"filename\":\"icon_${s}x${s}@2x.png\"},"
+done
+iconutil -c icns "$ICONSET" -o "$RES/AppIcon.icns"
+printf '{"images":[%s],"info":{"version":1,"author":"xcode"}}' "${IMAGES%,}" > "$XCA/Contents.json"
+printf '{"info":{"version":1,"author":"xcode"}}' > "$BUILD/Assets.xcassets/Contents.json"
+if xcrun --find actool >/dev/null 2>&1; then
+  xcrun actool --compile "$RES" --platform macosx --minimum-deployment-target 12.0 --app-icon AppIcon \
+    --output-partial-info-plist "$BUILD/assets-info.plist" --errors --warnings "$BUILD/Assets.xcassets" >/dev/null ||
+    echo 'actool не собрал Assets.car — остаётся AppIcon.icns'
+else
+  echo 'actool нет (только Command Line Tools) — значок только в AppIcon.icns'
+fi
+ls "$RES"/AppIcon.icns "$RES"/Assets.car 2>/dev/null || true
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 
 # --- проверка: встроенный Python видит все модули
