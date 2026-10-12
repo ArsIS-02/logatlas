@@ -152,7 +152,7 @@ Check 'compileall'
 Push-Location $env:TEMP
 $env:LOGATLAS_DATA = Join-Path $build 'check-data'     # import app.main создаёт папку данных
 try {
-  & (Join-Path $dist 'python\python.exe') -c "import app.main, app.sigma, starlette, uvicorn, multipart, yaml, pystray, PIL, ssl, importlib.util as u; assert u.find_spec('evtx') or u.find_spec('Evtx'), 'evtx'; assert app.sigma._ssl_context().cert_store_stats().get('x509_ca'), 'no CA certificates for HTTPS'; print('modules ok, LogAtlas', app.main.VERSION, 'orjson' if u.find_spec('orjson') else 'json')"
+  & (Join-Path $dist 'python\python.exe') -c "import app.main, app.sigma, app.net, app.mitre, starlette, uvicorn, multipart, yaml, pystray, PIL, ssl, importlib.util as u; assert u.find_spec('evtx') or u.find_spec('Evtx'), 'evtx'; assert app.net.ssl_context().cert_store_stats().get('x509_ca'), 'no CA certificates for HTTPS'; import json; assert len(json.load(open(app.mitre.SNAPSHOT))['techniques']) > 500, 'mitre snapshot'; print('modules ok, LogAtlas', app.main.VERSION, 'orjson' if u.find_spec('orjson') else 'json')"
   Check 'проверка модулей'
 } finally { Pop-Location; Remove-Item Env:LOGATLAS_DATA }
 

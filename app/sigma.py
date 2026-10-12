@@ -24,14 +24,11 @@ import logging
 import os
 import re
 import sqlite3
-import ssl
 import threading
 import time
-import urllib.error
-import urllib.request
 import zipfile
 
-from . import db
+from . import db, net
 
 log = logging.getLogger("logatlas.sigma")
 
@@ -1066,36 +1063,10 @@ def feed_info() -> dict | None:
             "updated": r[3], "count": len(json.loads(r[4] or "[]"))}
 
 
-def _ssl_context() -> ssl.SSLContext:
-    """Проверка сертификатов: системное хранилище, а если оно пусто (встроенный Python приложения
-    для macOS) — certifi или /etc/ssl/cert.pem. SSL_CERT_FILE задаёт свой корневой сертификат (прокси с подменой)."""
-    ctx = ssl.create_default_context()
-    if ctx.cert_store_stats().get("x509_ca") or os.environ.get("SSL_CERT_FILE") or os.environ.get("SSL_CERT_DIR"):
-        return ctx
-    try:
-        import certifi
-        return ssl.create_default_context(cafile=certifi.where())
-    except ImportError:
-        pass
-    if os.path.isfile("/etc/ssl/cert.pem"):
-        return ssl.create_default_context(cafile="/etc/ssl/cert.pem")
-    return ctx
-
-
 def _download(url: str) -> bytes:
-    req = urllib.request.Request(url, headers={"User-Agent": "LogAtlas (Sigma rules update)"})
-    buf = io.BytesIO()
-    with urllib.request.urlopen(req, timeout=60, context=_ssl_context()) as r:
-        UPDATE["size"] = int(r.headers.get("Content-Length") or 0)
-        while True:
-            chunk = r.read(256 << 10)
-            if not chunk:
-                break
-            buf.write(chunk)
-            UPDATE["received"] = buf.tell()
-            if buf.tell() > MAX_DOWNLOAD:
-                raise RuntimeError("Архив правил больше 100 МБ — загрузка остановлена")
-    return buf.getvalue()
+    def progress(got, total):
+        UPDATE.update(received=got, size=total)
+    return net.download(url, MAX_DOWNLOAD, progress)
 
 
 def _release_version(data: bytes) -> tuple[str, str]:
@@ -1130,21 +1101,8 @@ def _master_keep(name: str) -> bool:
     return len(parts) > 2 and parts[1] in _MASTER_DIRS          # sigma-master/rules/… и т. п.
 
 
-def _net_error(e: Exception) -> str:
-    host = re.sub(r"^https?://([^/]+).*", r"\1", UPSTREAM)
-    offline = (" Если у этого компьютера нет доступа в интернет, скачайте архив на другом "
-               f"({UPSTREAM}/releases) и импортируйте его файлом ниже.")
-    if isinstance(e, urllib.error.HTTPError):
-        if e.code == 404:
-            return f"На {host} нет такого пакета правил (HTTP 404)."
-        if e.code in (403, 429):
-            return f"{host} временно ограничил загрузки (HTTP {e.code}) — попробуйте позже." + offline
-        return f"{host} ответил ошибкой HTTP {e.code}." + offline
-    reason = getattr(e, "reason", e)
-    if isinstance(reason, ssl.SSLCertVerificationError) or isinstance(e, ssl.SSLCertVerificationError):
-        return (f"Не удалось проверить сертификат {host}: {getattr(reason, 'verify_message', reason)}. "
-                "Если в сети прокси с собственным корневым сертификатом — укажите его в переменной SSL_CERT_FILE.")
-    return f"Нет связи с {host}: {reason}." + offline
+OFFLINE_HINT = ("Если у этого компьютера нет доступа в интернет, скачайте архив на другом "
+                f"({UPSTREAM}/releases) и импортируйте его файлом ниже.")
 
 
 def _update(package: str, apply: bool):
@@ -1154,8 +1112,10 @@ def _update(package: str, apply: bool):
         UPDATE["stage"] = f"Загрузка набора «{title}» из SigmaHQ…"
         try:
             data = _download(url)
-        except (urllib.error.URLError, OSError) as e:
-            raise RuntimeError(_net_error(e)) from None
+        except Exception as e:  # noqa: BLE001  (сетевые ошибки разных классов)
+            if isinstance(e, RuntimeError):
+                raise
+            raise RuntimeError(net.error_text(e, url, OFFLINE_HINT)) from None
         if asset:
             version, released = _release_version(data)
             keep = None

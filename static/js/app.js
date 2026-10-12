@@ -16,6 +16,7 @@ import { renderReport } from './views/report.js';
 import { renderProgress } from './views/progress.js';
 import { renderHosts, renderCollect } from './views/hosts.js';
 import { renderRules, RULES_ICON } from './views/rules.js';
+import { renderCoverage, COVERAGE_ICON } from './views/coverage.js';
 import { openEvent, closeDrawer } from './views/event.js';
 
 const TABS = [
@@ -56,6 +57,7 @@ function parseHash() {
   if (parts[0] === 'p' && parts[1]) return { kind: 'home', platform: parts[1] };
   if (parts[0] === 'hosts') return { kind: 'hosts' };
   if (parts[0] === 'rules') return { kind: 'rules' };
+  if (parts[0] === 'coverage') return { kind: 'coverage' };
   if (parts[0] === 'collect' && parts[1]) return { kind: 'collect', hostId: parts[1] };
   return { kind: 'home', platform: 'all' };
 }
@@ -108,7 +110,8 @@ function renderSide() {
   mount($('#platforms'), h`${Object.entries(PLATFORMS).map(([k, p]) => h`
     <a class="plat ${activePlat === k ? 'on' : ''}" href="#/p/${k}">${raw(platIcon(k))}<span>${p.name}</span><span class="cnt">${counts[k] || ''}</span></a>`)}
     <a class="plat plat-hosts ${kind === 'hosts' || kind === 'collect' ? 'on' : ''}" href="#/hosts">${raw(HOSTS_ICON)}<span>Хосты и сбор</span></a>
-    <a class="plat ${kind === 'rules' ? 'on' : ''}" href="#/rules">${RULES_ICON}<span>Правила Sigma</span></a>`);
+    <a class="plat ${kind === 'rules' ? 'on' : ''}" href="#/rules">${RULES_ICON}<span>Правила Sigma</span></a>
+    <a class="plat ${kind === 'coverage' ? 'on' : ''}" href="#/coverage">${COVERAGE_ICON}<span>Покрытие</span></a>`);
   const listPlat = activePlat || 'all';
   const list = S.cases.filter((c) => listPlat === 'all' || c.platform === listPlat || ['mixed', 'other', null].includes(c.platform));
   mount($('#side-cases'), h`
@@ -183,6 +186,12 @@ function renderTop() {
   if (r.kind === 'rules') {
     mount(top, h`<div class="top-row"><div class="top-title"><h1>Правила Sigma</h1>
       <div class="chips"><span class="chip">импорт правил SigmaHQ и своих</span></div></div></div>`);
+    S.ribbonApi = null;
+    return;
+  }
+  if (r.kind === 'coverage') {
+    mount(top, h`<div class="top-row"><div class="top-title"><h1>Покрытие</h1>
+      <div class="chips"><span class="chip">что размечено и что закрыто правилами</span></div></div></div>`);
     S.ribbonApi = null;
     return;
   }
@@ -310,6 +319,14 @@ async function route() {
     renderSide();
     renderTop();
     await renderRules(view);
+    return;
+  }
+  if (r.kind === 'coverage') {
+    S.case = null;
+    S.full = null;
+    renderSide();
+    renderTop();
+    await renderCoverage(view);
     return;
   }
   if (r.kind === 'hosts' || r.kind === 'collect') {

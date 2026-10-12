@@ -21,12 +21,12 @@ from starlette.responses import FileResponse, JSONResponse, Response, StreamingR
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from . import analytics, collect, compare, db, detections, ingest, maclocal, sigma, winlocal
+from . import analytics, collect, compare, coverage, db, detections, ingest, maclocal, mitre, sigma, winlocal
 from .parsers import SUPPORTED
 from .parsers.base import CATEGORIES
 from .timeutil import fmt_tz, ms_to_str
 
-VERSION = "1.7.0"
+VERSION = "1.8.0"
 STATIC = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
 log = logging.getLogger("logatlas")
 
@@ -695,6 +695,23 @@ def sigma_update_status(req):
     return J({**sigma.UPDATE, "feed": sigma.feed_info()})
 
 
+# ---------------------------------------------------------------------------
+# покрытие: разметка событий и матрица MITRE ATT&CK
+async def coverage_report(req):
+    return J(await run_in_threadpool(coverage.report))
+
+
+async def mitre_update(req: Request):
+    try:
+        return J(mitre.start_update())
+    except RuntimeError as e:
+        return _err(str(e))
+
+
+def mitre_update_status(req):
+    return J({**mitre.UPDATE, "meta": mitre.meta()})
+
+
 def _is_local(req: Request) -> bool:
     return (req.client.host if req.client else "") in ("127.0.0.1", "::1")
 
@@ -775,6 +792,9 @@ routes = [
     Route("/api/sigma/apply", sigma_apply_status, methods=["GET"]),
     Route("/api/sigma/update", sigma_update, methods=["POST"]),
     Route("/api/sigma/update", sigma_update_status, methods=["GET"]),
+    Route("/api/coverage", coverage_report),
+    Route("/api/mitre/update", mitre_update, methods=["POST"]),
+    Route("/api/mitre/update", mitre_update_status, methods=["GET"]),
     Route("/api/sigma/rules/{rid}", sigma_get),
     Route("/api/compare", compare_cases),
     Route("/api/cases/{cid}/compare-candidates", compare_candidates),
@@ -827,6 +847,7 @@ def create_app():
     db.init()
     compare.init()
     sigma.init()
+    mitre.init()
     if winlocal.ENABLED:
         winlocal.cleanup()
     if maclocal.ENABLED:
