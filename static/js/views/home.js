@@ -57,7 +57,19 @@ export async function renderHome(view, { platform, cases, meta, refresh }) {
           <label class="lbl">Часовой пояс хоста
             <select class="field" id="tzmode"><option value="auto">Определить по журналам</option><option value="fixed">Указать вручную</option></select></label>
           <label class="lbl hidden" id="tzwrap">Пояс<select class="field" id="tz">${raw(tzOptions())}</select></label>
+          <label class="lbl">Период разбора
+            <select class="field" id="pmode" title="Ограничить сбор событиями за выбранное время">
+              <option value="all">Весь архив</option>
+              <option value="24">Последние 24 часа</option>
+              <option value="72">Последние 3 дня</option>
+              <option value="168">Последние 7 дней</option>
+              <option value="720">Последние 30 дней</option>
+              <option value="custom">Свой период</option>
+            </select></label>
+          <label class="lbl hidden" id="pfrom-wrap">С<input class="field" type="datetime-local" id="pfrom"></label>
+          <label class="lbl hidden" id="pto-wrap">По<input class="field" type="datetime-local" id="pto"></label>
         </div>
+        <p class="muted small-t" id="phint">Можно оставить «Весь архив» — разберутся все события, — или выбрать период: тогда в сбор попадут только события за него, остальные отбросит разбор.</p>
         <div id="local-box" class="local-box hidden"></div>
         <div id="picked" class="hidden" style="margin-top:14px"></div>
       </div>
@@ -166,20 +178,66 @@ export async function renderHome(view, { platform, cases, meta, refresh }) {
   $('#files').addEventListener('change', (e) => addFiles(e.target.files));
   $('#folder').addEventListener('change', (e) => addFiles(e.target.files));
   $('#tzmode').addEventListener('change', (e) => $('#tzwrap').classList.toggle('hidden', e.target.value === 'auto'));
+
+  // Период разбора: «Весь архив» (по умолчанию) или ограничение по времени.
+  // Значения в полях — в поясе браузера, в запрос уходят метками времени в миллисекундах.
+  const pmode = $('#pmode');
+  const pfrom = $('#pfrom');
+  const pto = $('#pto');
+  const pad = (n) => String(n).padStart(2, '0');
+  const toLocal = (ms) => {
+    const d = new Date(ms);
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
+  const fromLocal = (v) => {
+    const t = new Date(v).getTime();
+    return Number.isFinite(t) ? t : null;
+  };
+  const showPeriodFields = (on) => {
+    ['#pfrom-wrap', '#pto-wrap'].forEach((s) => $(s).classList.toggle('hidden', !on));
+  };
+  const setPeriodPreset = (hours) => {
+    showPeriodFields(true);
+    pto.value = toLocal(Date.now());
+    pfrom.value = toLocal(Date.now() - hours * 3600e3);
+  };
+  pmode.addEventListener('change', () => {
+    if (pmode.value === 'all') showPeriodFields(false);
+    else if (pmode.value === 'custom') {
+      showPeriodFields(true);
+      if (!pfrom.value || !pto.value) setPeriodPreset(24);
+    } else setPeriodPreset(+pmode.value);
+  });
+  [pfrom, pto].forEach((el) => el.addEventListener('change', () => {
+    if (pmode.value !== 'custom') {
+      pmode.value = 'custom';
+      showPeriodFields(true);
+    }
+  }));
   ['dragenter', 'dragover'].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.add('over'); }));
   ['dragleave', 'drop'].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.remove('over'); }));
   drop.addEventListener('drop', (e) => { if (e.dataTransfer?.files?.length) addFiles(e.dataTransfer.files); });
 
   async function upload() {
+    const btn = $('#go');
+    const st = $('#upst');
     const fd = new FormData();
+    if (pmode.value !== 'all') {
+      const a = fromLocal(pfrom.value);
+      const b = fromLocal(pto.value);
+      if (!a || !b || a >= b) {
+        toast('Проверьте период: начало должно быть раньше конца');
+        return;
+      }
+      fd.append('since', String(a));
+      fd.append('until', String(b));
+    }
     picked.forEach((f) => fd.append('files', f, (f.webkitRelativePath || f.name).replace(/\//g, '__')));
     fd.append('name', $('#cname').value.trim());
     fd.append('tz_mode', $('#tzmode').value);
     fd.append('tz', $('#tz').value);
     if (platform !== 'all') fd.append('platform', platform);
-    const btn = $('#go');
     btn.disabled = true;
-    const st = $('#upst');
     try {
       const res = await api.upload(fd, (p) => { st.textContent = `Передача ${Math.round(p * 100)}%`; });
       window.location.hash = `#/c/${res.id}/overview`;
@@ -214,10 +272,36 @@ export async function renderHome(view, { platform, cases, meta, refresh }) {
       box.classList.toggle('hidden');
       mount(box, h`<label class="lbl">Период<select class="field" id="local-days">
           <option value="1">последние сутки</option><option value="3" selected>3 дня</option><option value="7">неделя</option>
-          <option value="14">2 недели</option><option value="30">30 дней</option></select></label>
+          <option value="14">2 недели</option><option value="30">30 дней</option>
+          <option value="custom">Свой период</option></select></label>
+        <label class="lbl hidden" id="lfrom-wrap">С<input class="field" type="datetime-local" id="lfrom"></label>
+        <label class="lbl hidden" id="lto-wrap">По<input class="field" type="datetime-local" id="lto"></label>
         <button class="btn primary" type="button" id="local-go">Собрать и разобрать</button>
         <span class="muted local-hint">Unified log без самых шумных подсистем, питание и установки. macOS спросит пароль администратора — LogAtlas его не видит.</span>`);
-      $('#local-go').addEventListener('click', () => startLocal({ days: +$('#local-days').value }));
+      const lmode = $('#local-days');
+      const lfrom = $('#lfrom');
+      const lto = $('#lto');
+      const showLocalDates = (on) => ['#lfrom-wrap', '#lto-wrap'].forEach((s) => $(s).classList.toggle('hidden', !on));
+      lmode.addEventListener('change', () => {
+        if (lmode.value === 'custom') {
+          showLocalDates(true);
+          if (!lfrom.value || !lto.value) {
+            lto.value = toLocal(Date.now());
+            lfrom.value = toLocal(Date.now() - 3 * 86400e3);
+          }
+        } else showLocalDates(false);
+      });
+      $('#local-go').addEventListener('click', () => {
+        if (lmode.value === 'custom') {
+          const a = fromLocal(lfrom.value);
+          const b = fromLocal(lto.value);
+          if (!a || !b || a >= b) {
+            toast('Проверьте период: начало должно быть раньше конца');
+            return;
+          }
+          startLocal({ since: a, until: b });
+        } else startLocal({ days: +lmode.value });
+      });
     });
   }
 

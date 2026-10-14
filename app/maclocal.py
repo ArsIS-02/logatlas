@@ -21,6 +21,12 @@ from . import collect, db, winlocal
 
 log = logging.getLogger("logatlas.local")
 
+
+def period_label(since: int, until: int) -> str:
+    """«01.10.2026 00:00 — 03.10.2026 12:00» — как период выглядит в интерфейсе."""
+    f = lambda x: time.strftime("%d.%m.%Y %H:%M", time.localtime(x))
+    return f"{f(since)} — {f(until)}"
+
 ENABLED = sys.platform == "darwin" and os.environ.get("LOGATLAS_DESKTOP") == "1"
 LOCAL_DIR = os.path.join(db.DATA_DIR, "local")
 PERIODS = (1, 3, 7, 14, 30)
@@ -95,10 +101,8 @@ def _watch_progress(jid: str, cid: str, path: str, stop: threading.Event):
         stop.wait(1)
 
 
-def _run(jid: str, cid: str, days: int, out_dir: str):
+def _run(jid: str, cid: str, since: int, until: int, out_dir: str):
     script = os.path.join(collect.SCRIPTS_DIR, "collect-macos.sh")
-    until = int(time.time())
-    since = until - days * 86400
     archive = os.path.join(out_dir, "this-mac-logs.tar")
     progress = os.path.join(out_dir, "progress.log")
     uid = os.getuid()
@@ -138,7 +142,8 @@ def _run(jid: str, cid: str, days: int, out_dir: str):
             return
         took = time.time() - t0
         winlocal.import_archive(archive, platform="macos", host=host(), case_id=cid,
-                                how=f"на этом Mac за {days} сут. (сбор занял {int(took // 60)}:{int(took % 60):02d})")
+                                how=f"на этом Mac за период {period_label(since, until)} "
+                                    f"(сбор занял {int(took // 60)}:{int(took % 60):02d})")
         _set(jid, state="done")
     except Exception as e:  # noqa: BLE001
         log.exception("local collect failed")
@@ -149,15 +154,25 @@ def _run(jid: str, cid: str, days: int, out_dir: str):
         shutil.rmtree(out_dir, ignore_errors=True)
 
 
-def start(days: int = 3) -> str:
+def start(days: int = 3, since=None, until=None) -> str:
+    """Запустить сбор. Период задаётся либо готовыми границами (since/until в секундах), либо числом
+    суток назад от сейчас — тогда границы считаются здесь."""
     if not ENABLED:
         raise RuntimeError("Сбор журналов этого Mac доступен в приложении LogAtlas для macOS")
-    try:
-        days = int(days)
-    except (TypeError, ValueError):
-        days = 3
-    if days not in PERIODS:
-        days = 3
+    if since and until:
+        since, until = int(since), int(until)
+        if since >= until:
+            raise RuntimeError("Начало периода должно быть раньше конца")
+    else:
+        try:
+            days = int(days)
+        except (TypeError, ValueError):
+            days = 3
+        if days not in PERIODS:
+            days = 3
+        until = int(time.time())
+        since = until - days * 86400
+    label = period_label(since, until)
     busy = winlocal.active_job(JOBS, _lock)
     if busy:                                       # сбор уже идёт — открыть его, а не запускать второй
         return busy["id"]
@@ -167,10 +182,12 @@ def start(days: int = 3) -> str:
     out_dir = os.path.join(LOCAL_DIR, jid)
     os.makedirs(out_dir, exist_ok=True)
     cid = winlocal.create_case("macos", host(), "Подтвердите права администратора в окне macOS…")
-    db.add_log(cid, "info", f"Период: последние {days} сут.; нужны права администратора — macOS спросит пароль в своём окне")
+    db.add_log(cid, "info", f"Период: {label}; нужны права администратора — macOS спросит пароль в своём окне")
     with _lock:
-        JOBS[jid] = {"id": jid, "state": "starting", "case": cid, "error": None, "started": time.time(), "days": days}
-    threading.Thread(target=_run, args=(jid, cid, days, out_dir), daemon=True, name=f"local-{jid}").start()
+        JOBS[jid] = {"id": jid, "state": "starting", "case": cid, "error": None, "started": time.time(),
+                     "since": since, "until": until}
+    threading.Thread(target=_run, args=(jid, cid, since, until, out_dir), daemon=True,
+                     name=f"local-{jid}").start()
     return jid
 
 

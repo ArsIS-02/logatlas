@@ -7,13 +7,24 @@
 
 Параметры:
   -OutDir <папка>  куда положить архив (по умолчанию — рабочий стол)
+  -Days <число>    за сколько последних суток выгружать журналы (по умолчанию 3)
+  -From <дата>     начало периода, если нужен свой (например, -From '2026-10-01 00:00')
+  -To <дата>       конец периода (по умолчанию — сейчас)
+  -All             выгрузить журналы целиком, без ограничения по времени
   -KeepTemp        не удалять временную папку с .evtx после упаковки
   -NoOpen          не открывать Проводник с готовым архивом
+
+Без параметров выгружаются события за последние 3 суток: журнал Windows хранит записи годами,
+и «весь журнал» — это десятки тысяч событий, которые не нужны для разбора.
 
 Файл сохранён в UTF-8 с BOM: без BOM Windows PowerShell 5.1 читает его как ANSI и ломает кириллицу.
 #>
 param(
   [string]$OutDir = [Environment]::GetFolderPath('Desktop'),
+  [int]$Days = 3,
+  [datetime]$From = [datetime]::MinValue,
+  [datetime]$To = [datetime]::MaxValue,
+  [switch]$All,
   [switch]$KeepTemp,
   [switch]$NoOpen
 )
@@ -38,6 +49,25 @@ if (-not $admin) {
 }
 
 if (-not (Test-Path $OutDir)) { New-Item -ItemType Directory -Path $OutDir -Force | Out-Null }
+
+# Период выгрузки: по умолчанию последние $Days суток. wevtutil умеет экспортировать только
+# подходящие события — передаём ему XPath-условие по времени.
+$query = ''
+if ($All) {
+  $period = 'весь журнал (без ограничения по времени)'
+} else {
+  $now = Get-Date
+  $since = if ($From -ne [datetime]::MinValue) { $From } else { $now.AddDays(-$Days) }
+  $until = if ($To -ne [datetime]::MaxValue) { $To } else { $now }
+  if ($since -ge $until) {
+    Say 'Начало периода позже конца — проверьте -Days, -From и -To.' 'Red'
+    exit 1
+  }
+  $period = '{0} — {1}' -f $since.ToString('dd.MM.yyyy HH:mm'), $until.ToString('dd.MM.yyyy HH:mm')
+  $fmt = 'yyyy-MM-ddTHH:mm:ss.fffZ'
+  $query = "*[System[TimeCreated[@SystemTime>='{0}' and @SystemTime<='{1}']]]" -f `
+    $since.ToUniversalTime().ToString($fmt), $until.ToUniversalTime().ToString($fmt)
+}
 $OutDir = (Resolve-Path $OutDir).Path
 
 $stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
@@ -48,6 +78,7 @@ $zip = Join-Path $OutDir ('{0}-logs-{1}.zip' -f $env:COMPUTERNAME, $stamp)
 Say ''
 Say ('  Временная папка: {0}' -f $tmp)
 Say ('  Архив будет:     {0}' -f $zip)
+Say ('  Период:          {0}' -f $period)
 Say ''
 
 $logs = @(
@@ -76,7 +107,8 @@ foreach ($l in $logs) {
   if (-not $count) { $count = '?' }
 
   $dest = Join-Path $tmp (($l -replace '[/ ]', '_') + '.evtx')
-  & wevtutil.exe epl $l $dest 2>$null
+  if ($query) { & wevtutil.exe epl $l $dest /q:$query 2>$null }
+  else { & wevtutil.exe epl $l $dest 2>$null }
   if ($LASTEXITCODE -eq 0 -and (Test-Path $dest)) {
     $mb = '{0:N1}' -f ((Get-Item $dest).Length / 1MB)
     Say ('{0} — {1} событий, {2} МБ' -f $prefix, $count, $mb) 'Green'

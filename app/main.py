@@ -86,6 +86,22 @@ def _err(msg, code=400):
     return J({"error": msg}, status_code=code)
 
 
+def _period(since_value, until_value):
+    """Границы периода сбора в миллисекундах. Период задаётся только целиком и только разумный
+    (1973 — 2100 годы): иначе возвращаем (None, None) — «весь архив»."""
+    def ms(value):
+        try:
+            x = int(value)
+        except (TypeError, ValueError):
+            return None
+        return x if 10 ** 11 < x < 4102444800000 else None
+
+    since, until = ms(since_value), ms(until_value)
+    if not since or not until or since >= until:
+        return None, None
+    return since, until
+
+
 def _case_public(c, with_log=False):
     c = dict(c)
     raw_log = c.pop("log", None)
@@ -148,6 +164,9 @@ async def create_case(req: Request):
         tz = 0
     tz_mode = form.get("tz_mode") or "auto"
     hint = form.get("platform") or None
+    since, until = _period(form.get("since"), form.get("until"))
+    if (form.get("since") or form.get("until")) and not since:
+        return _err("Проверьте период: начало должно быть раньше конца")
     if cid:
         case = db.get_case(cid)
         if not case:
@@ -180,7 +199,7 @@ async def create_case(req: Request):
     total = sum(os.path.getsize(p) for p in paths)
     db.add_log(cid, "info", f"Загружено через браузер: {len(paths)} файл(ов), {_human(total)}")
     db.set_case(cid, status="queued", stage="В очереди", progress=0)
-    ingest.worker().submit(cid, paths, tz, tz_mode)
+    ingest.worker().submit(cid, paths, tz, tz_mode, since, until)
     return J({"id": cid})
 
 
@@ -424,7 +443,8 @@ async def inbox_import(req: Request):
             c.execute("INSERT INTO cases(id,name,tz,tz_mode,created,updated,status,progress,stage) VALUES (?,?,?,?,?,?,?,?,?)",
                       (cid, name, tz, tz_mode, time.time(), time.time(), "queued", 0, "В очереди"))
     db.add_log(cid, "info", f"Импорт из папки inbox: {len(paths)} файл(ов)")
-    ingest.worker().submit(cid, paths, tz, tz_mode)
+    since, until = _period(body.get("since"), body.get("until"))
+    ingest.worker().submit(cid, paths, tz, tz_mode, since, until)
     return J({"id": cid})
 
 
@@ -716,7 +736,11 @@ async def local_collect(req: Request):
                 body = await req.json()
             except ValueError:
                 body = {}
-            jid = maclocal.start((body or {}).get("days", 3))
+            body = body or {}
+            since, until = _period(body.get("since"), body.get("until"))
+            jid = maclocal.start(body.get("days", 3),
+                                 since // 1000 if since else None,
+                                 until // 1000 if until else None)
     except RuntimeError as e:
         return _err(str(e))
     j = winlocal.status(jid) or maclocal.status(jid) or {}

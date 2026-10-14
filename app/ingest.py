@@ -24,6 +24,7 @@ from datetime import datetime, timedelta
 from . import analytics, db, detections, sigma
 from .parsers import choose
 from .parsers.base import Ctx, Source
+from .timeutil import ms_to_str
 
 log = logging.getLogger("logatlas.ingest")
 
@@ -201,8 +202,10 @@ class Worker:
         self.th = threading.Thread(target=self._run, daemon=True, name="ingest")
         self.th.start()
 
-    def submit(self, case_id, paths, tz_default, tz_mode):
-        self.q.put((case_id, paths, tz_default, tz_mode))
+    def submit(self, case_id, paths, tz_default, tz_mode, since=None, until=None):
+        """since/until — границы периода в миллисекундах (необязательно): события вне периода
+        в сбор не попадают."""
+        self.q.put((case_id, paths, tz_default, tz_mode, since, until))
 
     def _run(self):
         while True:
@@ -307,8 +310,13 @@ def _splittable(base: str, head: bytes) -> bool:
     return head.lstrip()[:1] != b"["        # JSON-массив (log show --style json) режется только целиком
 
 
-def parse_source(con, src, fidx, tz_default, tmpdir, default_mtime, counter=None, on_batch=None):
-    """Разбор одного файла в часть-базу. Возвращает описание для таблицы files (None — пустой файл)."""
+def parse_source(con, src, fidx, tz_default, tmpdir, default_mtime, counter=None, on_batch=None, since=None,
+                 until=None):
+    """Разбор одного файла в часть-базу. Возвращает описание для таблицы files (None — пустой файл).
+
+    since/until (миллисекунды) — период сбора: события за его пределами не записываются. События без
+    времени (t <= 0) оставляем: по ним видно, что журнал был, но время в нём не распозналось.
+    """
     if not src.head:
         return None
     info = {"name": src.name, "size": src.size, "parser": None, "plabel": None, "label": None, "platform": None,
@@ -321,7 +329,7 @@ def parse_source(con, src, fidx, tz_default, tmpdir, default_mtime, counter=None
     info["plabel"] = getattr(parser_cls, "label", "") or parser_cls.name
     anchor = datetime.utcfromtimestamp(src.mtime or default_mtime) + timedelta(minutes=tz_default)
     ctx = Ctx(src, anchor, tmpdir)
-    batch, cnt, err = [], 0, None
+    batch, cnt, err, outside = [], 0, None, 0
 
     def flush():
         nonlocal cnt
@@ -336,8 +344,21 @@ def parse_source(con, src, fidx, tz_default, tmpdir, default_mtime, counter=None
         if on_batch:
             on_batch()
 
+    def in_period(t):
+        # Границы периода заданы в миллисекундах; события без времени не отбрасываем.
+        if t is None or t <= 0:
+            return True
+        if since and t < since:
+            return False
+        if until and t > until:
+            return False
+        return True
+
     try:
         for e in parser_cls().parse(src, ctx):
+            if (since or until) and not in_period(e[0]):
+                outside += 1
+                continue
             batch.append((fidx,) + e)
             if len(batch) >= BATCH:
                 flush()
@@ -348,7 +369,7 @@ def parse_source(con, src, fidx, tz_default, tmpdir, default_mtime, counter=None
         flush()
     info.update(label=source_label(parser_cls, ctx, src.base), platform=ctx.platform or parser_cls.platform,
                 events=cnt, noise=ctx.noise, bad=ctx.bad, error=err, status="error" if err and not cnt else "ok",
-                tz=dict(ctx.tz_votes), hosts=dict(ctx.host_votes))
+                tz=dict(ctx.tz_votes), hosts=dict(ctx.host_votes), outside=outside)
     return info
 
 
@@ -369,7 +390,8 @@ def _run_task(task):
             try:
                 for src in explode(fh, task["name"], task["size"], task["mtime"], task["tmp"], task["depth"], notes):
                     info = parse_source(con, src, len(leaves), task["tz_default"], task["tmp"],
-                                        task["default_mtime"], _COUNTER)
+                                        task["default_mtime"], _COUNTER, since=task.get("since"),
+                                        until=task.get("until"))
                     if info:
                         leaves.append(info)
             except Exception as ex:  # noqa: BLE001  повреждённый архив — разобранное до ошибки сохраняем
@@ -392,11 +414,13 @@ def _run_task(task):
 class _Job:
     """Состояние одного разбора: план (единицы работы по порядку), воркеры, прогресс."""
 
-    def __init__(self, case_id, tz_default, tmpdir, notes):
+    def __init__(self, case_id, tz_default, tmpdir, notes, since=None, until=None):
         self.case_id = case_id
         self.tz_default = tz_default
         self.tmpdir = tmpdir
         self.notes = notes
+        self.since = since             # период сбора в миллисекундах (None — без ограничения)
+        self.until = until
         self.units = []                 # по порядку: {"part", "result" | "future", "group", "upload", ...}
         self.seq = 0
         self.pool = None
@@ -460,7 +484,7 @@ class _Job:
         part = self._part()
         task = {"kind": kind, "path": path, "member": member, "name": name, "size": size, "mtime": mtime,
                 "depth": depth, "part": part, "tmp": part + ".tmp", "cleanup": cleanup, "tz_default": self.tz_default,
-                "default_mtime": default_mtime}
+                "default_mtime": default_mtime, "since": self.since, "until": self.until}
         unit = {"part": part, "group": group, "upload": upload, "name": name, "size": size}
         if self.pool is not None:
             # не уходим далеко вперёд воркеров: иначе куски большого файла займут весь диск
@@ -668,7 +692,7 @@ def _plan_upload(path, job):
     job.read_bytes += st.st_size
 
 
-def run_ingest(case_id, paths, tz_default, tz_mode):
+def run_ingest(case_id, paths, tz_default, tz_mode, since=None, until=None):
     t_start = time.time()
     check_cancelled(case_id)
     case = db.get_case(case_id)
@@ -681,9 +705,13 @@ def run_ingest(case_id, paths, tz_default, tz_mode):
         tz_mode = "fixed"
     db.set_case(case_id, status="processing", progress=0.01, stage="Распаковка и разбор", message=None)
     db.add_log(case_id, "info", f"Разбор: распаковка и определение формата ({len(paths)} файл(ов) на входе)")
+    if since or until:
+        db.add_log(case_id, "info", f"Период сбора: {ms_to_str(since) if since else 'начало'} — "
+                                    f"{ms_to_str(until) if until else 'конец'}; "
+                                    f"события за его пределами в сбор не попадут")
     tmpdir = tempfile.mkdtemp(dir=db.TMP_DIR)
     notes = []
-    job = _Job(case_id, tz_default, tmpdir, notes)
+    job = _Job(case_id, tz_default, tmpdir, notes, since, until)
     job.total_bytes = sum(os.path.getsize(p) for p in paths) or 1
     con = None
     try:
@@ -707,7 +735,7 @@ def run_ingest(case_id, paths, tz_default, tz_mode):
             shutil.rmtree(tmpdir, ignore_errors=True)
             os.makedirs(tmpdir, exist_ok=True)
             del notes[:]
-            job = _Job(case_id, tz_default, tmpdir, notes)
+            job = _Job(case_id, tz_default, tmpdir, notes, since, until)
             job.total_bytes = sum(os.path.getsize(p) for p in paths) or 1
             for path in paths:
                 check_cancelled(case_id)
@@ -718,10 +746,14 @@ def run_ingest(case_id, paths, tz_default, tz_mode):
 
         # --- сводим результаты ---------------------------------------------------
         tz_votes, host_votes = Counter(), Counter()
+        outside_total = 0
         for u in job.units:
             for info in u["result"]["leaves"]:
                 tz_votes.update(info["tz"])
                 host_votes.update(info["hosts"])
+                outside_total += info.get("outside", 0)
+        if outside_total:
+            db.add_log(case_id, "info", f"Вне выбранного периода: {outside_total} событий — в сбор не вошли")
         tz = tz_default
         if tz_mode == "auto" and first_load:
             nz = [(k, v) for k, v in tz_votes.items() if k is not None]
