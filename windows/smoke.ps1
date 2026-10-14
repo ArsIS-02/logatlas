@@ -74,7 +74,12 @@ function Test-Demo($port, $label) {
 }
 
 function Get-Window($root) {
-  @(Get-Process LogAtlas -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($root, 'OrdinalIgnoreCase') })
+  # Служба — тоже LogAtlas.exe (--service), но окна у неё нет: её из списка исключаем.
+  @(Get-CimInstance Win32_Process -Filter "Name='LogAtlas.exe'" -ErrorAction SilentlyContinue |
+    Where-Object {
+      $_.ExecutablePath -and $_.ExecutablePath.StartsWith($root, 'OrdinalIgnoreCase') -and
+      -not ($_.CommandLine -and $_.CommandLine -match '--service')
+    } | ForEach-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue })
 }
 
 function Test-Window($root, $dataDir) {
