@@ -88,13 +88,23 @@ function Test-Window($root, $dataDir) {
 }
 
 # служба работает как python.exe из той же папки, окно и его сервер — LogAtlas.exe и pythonw.exe
-function Wait-NoProcess($under, $sec = 30, [string[]]$Names = @('python', 'pythonw', 'LogAtlas')) {
+function Wait-NoProcess($under, $sec = 30, [string[]]$Names = @('python', 'pythonw', 'LogAtlas'), [switch]$SkipService) {
   for ($i = 0; $i -lt $sec; $i++) {
-    $p = @(Get-Process $Names -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($under, 'OrdinalIgnoreCase') })
-    if (-not $p) { return }
+    $procs = @(Get-Process $Names -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($under, 'OrdinalIgnoreCase') })
+    if ($SkipService -and $procs.Count) {
+      # Процессы службы (LogAtlas.exe --service и запущенный им pythonw --service) работают постоянно:
+      # их не считаем и смотрим на командную строку.
+      $procs = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+        $_.Name -in @('python.exe', 'pythonw.exe', 'LogAtlas.exe') -and $_.ExecutablePath -and
+        $_.ExecutablePath.StartsWith($under, 'OrdinalIgnoreCase') -and
+        -not ($_.CommandLine -and $_.CommandLine -match '--service')
+      })
+    }
+    if (-not $procs.Count) { return }
     Start-Sleep -Seconds 1
   }
-  Fail "процессы LogAtlas из $under не завершились: $(($p | ForEach-Object { '{0}({1})' -f $_.ProcessName, $_.Id }) -join ', ')"
+  $what = @($procs | ForEach-Object { $id = if ($_.ProcessId) { $_.ProcessId } else { $_.Id }; "$($_.Name)($id)" })
+  Fail "процессы LogAtlas из $under не завершились: $($what -join ', ')"
 }
 
 # ---------------------------------------------------------------- синтаксис PowerShell-скриптов
@@ -186,7 +196,7 @@ $appServers = @(Get-CimInstance Win32_Process -Filter "Name='pythonw.exe'" -Erro
   })
 if ($appServers.Count) { Fail 'окно запустило свой сервер, хотя работает служба' }
 [void]$win.CloseMainWindow()
-Wait-NoProcess $inst -Names pythonw, LogAtlas
+Wait-NoProcess $inst -Names pythonw, LogAtlas -SkipService
 if (-not (Test-Health 8484)) { Fail 'служба остановилась после закрытия окна' }
 Write-Host '   окно открыло службу и закрылось, служба работает' -ForegroundColor Green
 

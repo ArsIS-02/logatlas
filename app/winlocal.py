@@ -1,13 +1,12 @@
 """LogAtlas для Windows: сбор журналов этого компьютера.
 
 Работает только в режиме приложения (LOGATLAS_DESKTOP=1 ставит windows/launcher.pyw): панель запускает
-окно сборщика scripts/collect-windows-gui.cmd с правами администратора (запрос UAC), сборщик кладёт
+сборщик scripts/collect-windows-gui.ps1 с правами администратора (запрос UAC), сборщик кладёт
 архив в DATA_DIR/local/<задание>, а панель забирает его на разбор, как обычную загрузку.
 В режиме службы окно показать некому (служба работает вне сеанса пользователя), поэтому там это выключено.
 """
 from __future__ import annotations
 
-import base64
 import logging
 import os
 import shutil
@@ -28,23 +27,13 @@ _lock = threading.Lock()
 JOBS: dict[str, dict] = {}
 
 
-def _ps_str(s: str) -> str:
-    return "'" + s.replace("'", "''") + "'"
-
-
 def _launch_elevated(script: str, out_dir: str, url: str):
-    """Запуск PowerShell с окном сборщика от имени администратора. Возвращает дескриптор процесса или None,
-    если пользователь отказался в окне UAC."""
+    """Запуск сборщика (collect-windows-gui.ps1) с окном от имени администратора. Возвращает дескриптор
+    процесса или None, если пользователь отказался в окне UAC."""
     import ctypes
     from ctypes import wintypes
 
-    ps = (f"$env:LA_SELF={_ps_str(script)}; $env:LA_OUT={_ps_str(out_dir)}; $env:LA_URL={_ps_str(url)}; "
-          "try { $t = [IO.File]::ReadAllText($env:LA_SELF, [Text.Encoding]::UTF8); "
-          "& ([scriptblock]::Create($t.Substring($t.IndexOf('#' + '##PS')))) } "
-          "catch { Add-Type -AssemblyName System.Windows.Forms; "
-          "[void][Windows.Forms.MessageBox]::Show($_.ToString(), 'LogAtlas') }")
-    args = ("-NoProfile -STA -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand "
-            + base64.b64encode(ps.encode("utf-16-le")).decode("ascii"))
+    args = f'-NoProfile -STA -ExecutionPolicy Bypass -File "{script}"'
 
     class SEI(ctypes.Structure):
         _fields_ = [("cbSize", wintypes.DWORD), ("fMask", wintypes.ULONG), ("hwnd", wintypes.HWND),
@@ -65,8 +54,22 @@ def _launch_elevated(script: str, out_dir: str, url: str):
     shell32 = ctypes.WinDLL("shell32", use_last_error=True)
     shell32.ShellExecuteExW.argtypes = [ctypes.POINTER(SEI)]
     shell32.ShellExecuteExW.restype = wintypes.BOOL
-    if not shell32.ShellExecuteExW(ctypes.byref(sei)):
+    # Сборщик забирает архив из LA_OUT и знает адрес панели из LA_URL: передаём их переменными окружения —
+    # дочерний процесс наследует их при запуске (у ShellExecuteEx нет своего блока окружения).
+    saved = {k: os.environ.get(k) for k in ("LA_OUT", "LA_URL")}
+    os.environ["LA_OUT"] = out_dir
+    os.environ["LA_URL"] = url
+    started, err = False, 0
+    try:
+        started = bool(shell32.ShellExecuteExW(ctypes.byref(sei)))
         err = ctypes.get_last_error()
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    if not started:
         if err == 1223:                          # ERROR_CANCELLED — «Нет» в окне UAC
             return None
         raise OSError(err, ctypes.FormatError(err))
@@ -236,9 +239,9 @@ def start(url: str, on_done=None) -> str:
     busy = active_job(JOBS, _lock)
     if busy:                                       # сбор уже идёт — открыть его, а не запускать второй
         return busy["id"]
-    script = os.path.join(collect.SCRIPTS_DIR, "collect-windows-gui.cmd")
+    script = os.path.join(collect.SCRIPTS_DIR, "collect-windows-gui.ps1")
     if not os.path.isfile(script):
-        raise RuntimeError("Не найден сборщик scripts\\collect-windows-gui.cmd — переустановите LogAtlas")
+        raise RuntimeError("Не найден сборщик scripts\\collect-windows-gui.ps1 — переустановите LogAtlas")
     jid = uuid.uuid4().hex[:8]
     out_dir = os.path.join(LOCAL_DIR, jid)
     os.makedirs(out_dir, exist_ok=True)
