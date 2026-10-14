@@ -138,6 +138,10 @@ rm -rf "$BUILD/check-data"
 
 # --- подпись без сертификата (ad-hoc): на Apple Silicon неподписанный код не запускается вовсе
 step 'подпись (ad-hoc)'
+# Папка сборки может лежать в «Документах» или на рабочем столе, а их синхронизирует iCloud:
+# на файлах появляются com.apple.FinderInfo и com.apple.fileprovider.*, и codesign отказывается
+# подписывать бандл — «resource fork, Finder information, or similar detritus not allowed».
+xattr -cr "$APP" 2>/dev/null || true
 find "$RES" -type f \( -name '*.so' -o -name '*.dylib' -o -perm -u+x \) -print0 |
   while IFS= read -r -d '' f; do
     if file -b "$f" | grep -q 'Mach-O'; then codesign --force --sign - "$f"; fi
@@ -177,6 +181,20 @@ done
 sed -e "s/@VERSION@/$VERSION/g" -e "s/@ARCH@/$ARCH/g" macos/pkg/distribution.xml > "$BUILD/distribution.xml"
 pkgbuild --root "$PKGROOT" --identifier io.github.arsis-02.logatlas --version "$VERSION" \
   --install-location / --scripts "$PKGSCRIPTS" "$BUILD/LogAtlas-component.pkg" >/dev/null
+# pkgbuild помечает пакет с программой как «переселяемый»: в описании пакета появляется <relocate/>.
+# С этой отметкой установщик ищет уже имеющуюся копию LogAtlas.app по её идентификатору и, найдя,
+# ставит программу рядом с ней, а не в «Программы», после чего рапортует об успехе. Копия находится
+# легко: распакованная сборка рядом, смонтированный образ или прежняя установка в другом месте.
+# Убираем отметку — установка всегда идёт туда, куда указывает --install-location.
+CEXP=$BUILD/component-expanded
+rm -rf "$CEXP"
+pkgutil --expand "$BUILD/LogAtlas-component.pkg" "$CEXP"
+sed '/<relocate\/>/d' "$CEXP/PackageInfo" > "$CEXP/PackageInfo.new"
+mv "$CEXP/PackageInfo.new" "$CEXP/PackageInfo"
+grep -q '<relocate/>' "$CEXP/PackageInfo" && { echo 'не удалось снять отметку переселения' >&2; exit 1; }
+rm -f "$BUILD/LogAtlas-component.pkg"
+pkgutil --flatten "$CEXP" "$BUILD/LogAtlas-component.pkg"
+rm -rf "$CEXP"
 PKG=$DIST/LogAtlas-$VERSION-macos-$ARCH.pkg
 rm -f "$PKG"
 productbuild --distribution "$BUILD/distribution.xml" --package-path "$BUILD" --resources "$PKGRES" "$PKG" >/dev/null

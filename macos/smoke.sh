@@ -25,6 +25,9 @@ report() {
     echo "--- что поставлено по квитанции:"; pkgutil --files io.github.arsis-02.logatlas 2>&1 | head -n 8
     echo "--- /Applications: $(ls /Applications 2>/dev/null | head -n 12 | tr '\n' ' ')"
     echo "--- /Applications/LogAtlas.app: $([ -d /Applications/LogAtlas.app ] && echo есть || echo нет)"
+    echo "--- LogAtlas на дисках: $(ls -d /Applications/LogAtlas.app /Volumes/*/LogAtlas.app 2>/dev/null | tr '\n' ' ' || echo 'нигде')"
+    echo "--- место на диске:"; df -h / /Applications 2>/dev/null | head -n 4
+    echo "--- журнал установщика (/var/log/install.log):"; tail -n 25 /var/log/install.log 2>/dev/null || echo 'недоступен'
     if [ -s "${WORK:-}/installed.log" ]; then echo '--- вывод установленной программы:'; tail -n 15 "${WORK}/installed.log"; fi
   } > "$DATA/smoke-fail.log" 2>&1 || true
 }
@@ -129,10 +132,18 @@ grep -q "NEED_ARCH=\"$ARCH\"" "$SC/preinstall" || fail "в preinstall не по�
   fail 'в пакете нет Applications/LogAtlas.app'
 echo "   скрипты и проверки на месте"
 
+step 'образ диска: снять перед установкой'
+# Пока образ смонтирован, в нём лежит вторая копия LogAtlas.app. Установщик умеет ставить программу
+# рядом с уже найденной копией (переселение): тогда он рапортует об успехе, а в «Программах» ничего
+# не появляется. Снимаем образ, чтобы установка была про /Applications и ни про что другое.
+hdiutil detach "$MNT" >/dev/null 2>&1 || true
+[ -d "$MNT/LogAtlas.app" ] && fail 'образ диска остался смонтированным'
+echo '   образ снят'
+
 step 'установщик: установка'
 INSTALLED=/Applications/LogAtlas.app
 sudo rm -rf "$INSTALLED"
-install_pkg() { sudo installer -pkg "$PKG" -target / >"$WORK/installer.log" 2>&1 ||
+install_pkg() { sudo installer -pkg "$PKG" -target / -verboseR >"$WORK/installer.log" 2>&1 ||
   { echo '--- вывод установщика:'; tail -n 25 "$WORK/installer.log"; fail "$1"; }; }
 install_pkg 'установщик отработал с ошибкой'
 [ -d "$INSTALLED" ] || fail 'после установки нет /Applications/LogAtlas.app'
