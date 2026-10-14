@@ -1,4 +1,4 @@
-﻿<#
+<#
 Проверка сборки LogAtlas для Windows (запускается в GitHub Actions после windows\build.ps1, нужны права
 администратора): переносной zip с окном, установщик со службой, окно рядом со службой, удаление.
 Окна сообщений отключены переменной LOGATLAS_NO_DIALOGS=1 — их некому закрыть.
@@ -97,6 +97,27 @@ function Wait-NoProcess($under, $sec = 30, [string[]]$Names = @('python', 'pytho
   Fail "процессы LogAtlas из $under не завершились: $(($p | ForEach-Object { '{0}({1})' -f $_.ProcessName, $_.Id }) -join ', ')"
 }
 
+# ---------------------------------------------------------------- синтаксис PowerShell-скриптов
+# Сборщики журналов и скрипты подготовки хостов не запускаются в этой проверке, но синтаксис их можно
+# проверить здесь: ошибка в них иначе дошла бы до людей.
+Step 'синтаксис PowerShell-скриптов'
+$psFiles = @(
+  Get-ChildItem -Path (Join-Path $repo 'scripts'), (Join-Path $repo 'windows'), (Join-Path $repo 'app\setup') `
+    -Filter '*.ps1' -File -ErrorAction SilentlyContinue
+)
+if (-not $psFiles.Count) { Fail 'не найдено ни одного .ps1' }
+foreach ($f in $psFiles) {
+  $errors = $null
+  [void][System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$errors)
+  if ($errors -and $errors.Count) {
+    $errors | Select-Object -First 5 | ForEach-Object {
+      Write-Host ("   {0}:{1} {2}" -f $f.Name, $_.Extent.StartLineNumber, $_.Message)
+    }
+    Fail "синтаксис $($f.Name)"
+  }
+}
+Write-Host "   проверено файлов: $($psFiles.Count)" -ForegroundColor Green
+
 # ---------------------------------------------------------------- переносной zip: окно
 Step "переносной zip ($Arch)"
 $zip = Join-Path $distRoot "LogAtlas-$Version-portable-$Arch.zip"
@@ -156,9 +177,14 @@ $adata = Join-Path $env:LOCALAPPDATA 'LogAtlas'
 Start-Process -FilePath (Join-Path $inst 'LogAtlas.exe')
 $win = Test-Window $inst $adata
 Start-Sleep -Seconds 3
-if (@(Get-Process pythonw -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($inst, 'OrdinalIgnoreCase') }).Count) {
-  Fail 'окно запустило свой сервер, хотя работает служба'
-}
+# Служба сама запускает pythonw.exe из папки программы (--service), поэтому «свой сервер окна» — это
+# только pythonw без --service в командной строке.
+$appServers = @(Get-CimInstance Win32_Process -Filter "Name='pythonw.exe'" -ErrorAction SilentlyContinue |
+  Where-Object {
+    $_.ExecutablePath -and $_.ExecutablePath.StartsWith($inst, 'OrdinalIgnoreCase') -and
+    $_.CommandLine -and ($_.CommandLine -notmatch '--service')
+  })
+if ($appServers.Count) { Fail 'окно запустило свой сервер, хотя работает служба' }
 [void]$win.CloseMainWindow()
 Wait-NoProcess $inst -Names pythonw, LogAtlas
 if (-not (Test-Health 8484)) { Fail 'служба остановилась после закрытия окна' }

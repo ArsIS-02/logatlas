@@ -98,7 +98,15 @@ def setup_logging(ddir: str, mode: str):
     root.setLevel(logging.INFO)
     fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
     if mode == "service":
-        h: logging.Handler = logging.StreamHandler(sys.stdout)     # вывод собирает WinSW в logs\
+        # Службу запускает сам LogAtlas.exe (pythonw без консоли), поэтому писать в stdout некуда:
+        # ведём журнал в %ProgramData%\LogAtlas\logs — туда же смотрит диагностика службы.
+        logs = os.path.join(ddir, "logs")
+        try:
+            os.makedirs(logs, exist_ok=True)
+        except OSError:
+            logs = ddir
+        h: logging.Handler = logging.handlers.RotatingFileHandler(
+            os.path.join(logs, "logatlas.log"), maxBytes=5 << 20, backupCount=3, encoding="utf-8")
     else:
         h = logging.handlers.RotatingFileHandler(os.path.join(ddir, "logatlas.log"), maxBytes=5 << 20,
                                                  backupCount=3, encoding="utf-8")

@@ -827,9 +827,9 @@ static void WINAPI ServiceMain(DWORD, LPWSTR*) {
     g_svcHandle = RegisterServiceCtrlHandlerExW(SERVICE_NAME, SvcCtrl, nullptr);
     if (!g_svcHandle) return;
     SvcReport(SERVICE_START_PENDING, NO_ERROR, 30000);
-    g_data = ServiceDataDir();
+    CreateDirectoryW(ServiceDataDir().c_str(), nullptr);
+    g_data = ServiceDataDir() + L"\\logs";             // журналы службы — %ProgramData%\LogAtlas\logs
     CreateDirectoryW(g_data.c_str(), nullptr);
-    CreateDirectoryW((g_data + L"\\logs").c_str(), nullptr);
     Log(L"служба: запуск");
     std::wstring py = g_root + L"\\python\\pythonw.exe";
     std::wstring cl = L"\"" + py + L"\" \"" + g_root + L"\\launcher.pyw\" --service";
@@ -870,7 +870,8 @@ static int RunServiceMode() {
     if (StartServiceCtrlDispatcherW(table)) return 0;
     if (GetLastError() != ERROR_FAILED_SERVICE_CONTROLLER_CONNECT) return 1;
     // запустили вручную, а не диспетчером служб: работаем как обычный сервер, пока не закроют
-    g_data = ServiceDataDir();
+    CreateDirectoryW(ServiceDataDir().c_str(), nullptr);
+    g_data = ServiceDataDir() + L"\\logs";
     CreateDirectoryW(g_data.c_str(), nullptr);
     Log(L"служба: запущена вручную (без диспетчера служб)");
     std::wstring py = g_root + L"\\python\\pythonw.exe";
