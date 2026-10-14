@@ -179,22 +179,23 @@ for f in welcome conclusion; do
   sed -e "s/@VERSION@/$VERSION/g" -e "s/@ARCH_RU@/$ARCH_RU/g" "macos/pkg/$f.html" > "$PKGRES/$f.html"
 done
 sed -e "s/@VERSION@/$VERSION/g" -e "s/@ARCH@/$ARCH/g" macos/pkg/distribution.xml > "$BUILD/distribution.xml"
-pkgbuild --root "$PKGROOT" --identifier io.github.arsis-02.logatlas --version "$VERSION" \
+# BundleIsRelocatable — искать ли уже имеющуюся копию программы, чтобы поставить новую рядом с ней.
+# На macOS до 27 этот ключ по умолчанию включён, и установщик вёл себя так: находил копию LogAtlas.app
+# (в распакованной сборке, в смонтированном образе или в прежнем месте) и ставил программу рядом с
+# ней, а не в «Программы», после чего рапортовал об успехе. Явно выключаем поиск: программа всегда
+# встаёт туда, куда указывает --install-location.
+pkgbuild --analyze --root "$PKGROOT" "$BUILD/component.plist" >/dev/null
+i=0
+while /usr/libexec/PlistBuddy -c "Print :$i" "$BUILD/component.plist" >/dev/null 2>&1; do
+  if ! /usr/libexec/PlistBuddy -c "Set :$i:BundleIsRelocatable false" "$BUILD/component.plist" >/dev/null 2>&1; then
+    /usr/libexec/PlistBuddy -c "Add :$i:BundleIsRelocatable bool false" "$BUILD/component.plist" >/dev/null
+  fi
+  i=$((i + 1))
+done
+[ "$i" -gt 0 ] || { echo 'в сборке не найдено ни одного бандла' >&2; exit 1; }
+pkgbuild --root "$PKGROOT" --component-plist "$BUILD/component.plist" \
+  --identifier io.github.arsis-02.logatlas --version "$VERSION" \
   --install-location / --scripts "$PKGSCRIPTS" "$BUILD/LogAtlas-component.pkg" >/dev/null
-# pkgbuild помечает пакет с программой как «переселяемый»: в описании пакета появляется <relocate/>.
-# С этой отметкой установщик ищет уже имеющуюся копию LogAtlas.app по её идентификатору и, найдя,
-# ставит программу рядом с ней, а не в «Программы», после чего рапортует об успехе. Копия находится
-# легко: распакованная сборка рядом, смонтированный образ или прежняя установка в другом месте.
-# Убираем отметку — установка всегда идёт туда, куда указывает --install-location.
-CEXP=$BUILD/component-expanded
-rm -rf "$CEXP"
-pkgutil --expand "$BUILD/LogAtlas-component.pkg" "$CEXP"
-sed '/<relocate\/>/d' "$CEXP/PackageInfo" > "$CEXP/PackageInfo.new"
-mv "$CEXP/PackageInfo.new" "$CEXP/PackageInfo"
-grep -q '<relocate/>' "$CEXP/PackageInfo" && { echo 'не удалось снять отметку переселения' >&2; exit 1; }
-rm -f "$BUILD/LogAtlas-component.pkg"
-pkgutil --flatten "$CEXP" "$BUILD/LogAtlas-component.pkg"
-rm -rf "$CEXP"
 PKG=$DIST/LogAtlas-$VERSION-macos-$ARCH.pkg
 rm -f "$PKG"
 productbuild --distribution "$BUILD/distribution.xml" --package-path "$BUILD" --resources "$PKGRES" "$PKG" >/dev/null
