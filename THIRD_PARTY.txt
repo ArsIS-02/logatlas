@@ -5,8 +5,8 @@
 - DejaVu Sans Mono — Bitstream Vera Fonts License, https://dejavu-fonts.github.io/
 Устанавливаются при сборке образа: Starlette, Uvicorn, python-multipart (BSD), orjson (Apache-2.0/MIT), PyYAML (MIT), evtx / python-evtx (MIT/Apache-2.0).
 В сборки для Windows дополнительно входят: Python (PSF License), pystray (LGPL-3.0, без изменений — его можно
-заменить своей версией в python\Lib\site-packages), Pillow (MIT-CMU), six (MIT), WinSW (MIT,
-https://github.com/winsw/winsw), загрузчик Microsoft Edge WebView2 из пакета Microsoft.Web.WebView2
+заменить своей версией в python\Lib\site-packages), Pillow (MIT-CMU), six (MIT), загрузчик Microsoft Edge
+WebView2 из пакета Microsoft.Web.WebView2
 (встроен в LogAtlas.exe, лицензия Microsoft, https://www.nuget.org/packages/Microsoft.Web.WebView2).
 Установщик создан Inno Setup (https://jrsoftware.org/isinfo.php).
 В сборки для macOS входят Python из python-build-standalone (PSF License и лицензии входящих в него библиотек,

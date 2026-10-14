@@ -1,7 +1,8 @@
-﻿; LogAtlas для Windows — установщик (Inno Setup 6.3+).
+; LogAtlas для Windows — установщик (Inno Setup 6.3+).
 ; Собирается windows\build.ps1: ISCC /DAppVer=1.4.0 /DArch=x64|arm64 /DSrc=<папка сборки> windows\logatlas.iss
 ; Папка сборки: LogAtlas.exe (окно), launcher.pyw, logatlas.ico, python\ (встроенный Python с зависимостями),
-; app\, static\, scripts\, service\ (WinSW + service.ps1), install-service.cmd, uninstall-service.cmd.
+; app\, static\, scripts\, install-service.cmd, uninstall-service.cmd.
+; Службу Windows ставит сам LogAtlas.exe (--install-service): сторонней обёртки служб и PowerShell в поставке нет.
 
 #ifndef AppVer
   #define AppVer "1.8.6"
@@ -68,7 +69,7 @@ Name: "{autoprograms}\LogAtlas — сборщик журналов Windows"; Fil
 Name: "{autodesktop}\LogAtlas"; Filename: "{app}\LogAtlas.exe"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
-Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\service\service.ps1"" -Action install -Quiet"; StatusMsg: "Установка и запуск службы LogAtlas…"; Flags: runhidden waituntilterminated; Tasks: service
+Filename: "{app}\LogAtlas.exe"; Parameters: "--install-service --quiet"; StatusMsg: "Установка и запуск службы LogAtlas…"; Flags: waituntilterminated; Tasks: service
 Filename: "{app}\LogAtlas.exe"; Description: "Открыть LogAtlas"; Flags: postinstall nowait skipifsilent
 
 [UninstallDelete]
@@ -76,9 +77,7 @@ Type: filesandordirs; Name: "{app}\app"
 Type: filesandordirs; Name: "{app}\python"
 Type: filesandordirs; Name: "{app}\static"
 Type: filesandordirs; Name: "{app}\scripts"
-Type: files; Name: "{app}\service\*.log"
 Type: files; Name: "{app}\*.dll"
-Type: dirifempty; Name: "{app}\service"
 Type: dirifempty; Name: "{app}"
 
 [Code]
@@ -96,9 +95,28 @@ procedure RunService(Action: String);
 var
   Code: Integer;
 begin
-  Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
-       '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}') + '\service\service.ps1" -Action ' + Action + ' -Quiet',
-       '', SW_HIDE, ewWaitUntilTerminated, Code);
+  { Службу ставит и снимает сам LogAtlas.exe: сторонняя обёртка служб и запуск PowerShell с обходом
+    политики выполнения из поставки убраны — на такие наборы признаков ругаются антивирусы. }
+  Exec(ExpandConstant('{app}\LogAtlas.exe'), '--' + Action + '-service --quiet',
+       ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, Code);
+end;
+
+{ Остановить службу перед заменой файлов. Через sc.exe, а не через LogAtlas.exe: при обновлении поверх
+  прежней версии установлен именно старый LogAtlas.exe, который про эти ключи ещё не знает. }
+procedure StopServiceForUpdate();
+var
+  Code, i: Integer;
+begin
+  if not ServiceExists() then exit;
+  Exec(ExpandConstant('{sys}\sc.exe'), 'stop LogAtlas', '', SW_HIDE, ewWaitUntilTerminated, Code);
+  for i := 1 to 40 do
+  begin
+    { sc только просит остановиться: ждём, пока состояние службы станет STOPPED (до 20 секунд) }
+    if Exec(ExpandConstant('{sys}\cmd.exe'), '/c sc query LogAtlas | findstr /C:"STOPPED" >nul', '',
+            SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0) then break;
+    Sleep(500);
+  end;
+  Sleep(500);
 end;
 
 { Закрыть запущенные приложения LogAtlas, чтобы файлы можно было заменить или удалить }
@@ -118,9 +136,9 @@ function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   Result := '';
   ServiceWasInstalled := IsAdminInstallMode and ServiceExists();
-  if ServiceWasInstalled and FileExists(ExpandConstant('{app}\service\service.ps1')) then
+  if ServiceWasInstalled and FileExists(ExpandConstant('{app}\LogAtlas.exe')) then
   begin
-    RunService('stop');
+    StopServiceForUpdate();
     Sleep(1500);
   end;
   QuitApps();

@@ -6,7 +6,9 @@
 //
 //   LogAtlas.exe                 окно (данные — %LOCALAPPDATA%\LogAtlas или .\data рядом с portable.txt)
 //   LogAtlas.exe --app           своё окно со своим сервером, даже если работает служба LogAtlas
-//   LogAtlas.exe --quit | --tray | --autostart | --service   передаются launcher.pyw без окна
+//   LogAtlas.exe --quit | --tray | --autostart   передаются launcher.pyw без окна
+//   LogAtlas.exe --install-service | --uninstall-service | --stop-service [--quiet]   служба Windows
+//   LogAtlas.exe --service       работа под диспетчером служб (его запускает сама служба)
 //
 // Переменная LOGATLAS_NO_DIALOGS=1 (автоматические проверки) отключает окна сообщений.
 // Сборка — windows/build.ps1 (MSVC + заголовки WebView2 из NuGet-пакета Microsoft.Web.WebView2).
@@ -26,6 +28,7 @@
 #include <shellapi.h>
 #include <shobjidl.h>
 #include <winhttp.h>
+#include <winsvc.h>
 #include <wrl.h>
 #include <algorithm>
 #include <cstdio>
@@ -570,6 +573,322 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
 static bool HasArg(const wchar_t* cmd, const wchar_t* a) { return cmd && wcsstr(cmd, a) != nullptr; }
 
+// ---------------------------------------------------------------------------------------- служба Windows
+// Службу LogAtlas ставит, запускает и снимает сам LogAtlas.exe: сторонняя обёртка служб (WinSW) больше
+// не нужна, и вместе с ней из поставки уходит запуск PowerShell с обходом политики выполнения — на такие
+// наборы признаков ругаются антивирусы. Служба запускает встроенный Python и следит за ним: остановили
+// службу — сервер и его процессы разбора завершаются вместе с ней.
+static const wchar_t* SERVICE_NAME = L"LogAtlas";
+static SERVICE_STATUS_HANDLE g_svcHandle = nullptr;
+static SERVICE_STATUS g_svcStatus{};
+static HANDLE g_svcChild = nullptr, g_svcJob = nullptr;
+static bool g_svcStopping = false;
+
+static std::wstring ServiceDataDir() {                 // %ProgramData%\LogAtlas — данные и журналы службы
+    std::wstring pd = Env(L"ProgramData");
+    if (pd.empty()) pd = L"C:\\ProgramData";
+    return pd + L"\\LogAtlas";
+}
+
+static int JsonInt(const std::string& json, const char* key, int dflt) {
+    std::string k = std::string("\"") + key + "\":";
+    size_t p = json.find(k);
+    if (p == std::string::npos) return dflt;
+    p += k.size();
+    while (p < json.size() && (json[p] == ' ' || json[p] == '\t')) ++p;
+    int v = 0;
+    bool any = false;
+    while (p < json.size() && json[p] >= '0' && json[p] <= '9') { v = v * 10 + (json[p] - '0'); ++p; any = true; }
+    return (any && v > 0 && v < 65536) ? v : dflt;
+}
+
+static int ServicePort() {                             // порт из settings.json службы, иначе 8484
+    std::wstring f = ServiceDataDir() + L"\\settings.json";
+    HANDLE h = CreateFileW(f.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return 8484;
+    char buf[8192];
+    DWORD n = 0;
+    std::string json;
+    while (ReadFile(h, buf, sizeof buf, &n, nullptr) && n) json.append(buf, n);
+    CloseHandle(h);
+    return JsonInt(json, "port", 8484);
+}
+
+static void RunHidden(const std::wstring& cmd) {       // системная утилита (netsh) без окна
+    std::vector<wchar_t> b(cmd.begin(), cmd.end());
+    b.push_back(0);
+    STARTUPINFOW si{};
+    si.cb = sizeof si;
+    PROCESS_INFORMATION pi{};
+    if (CreateProcessW(nullptr, b.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
+        WaitForSingleObject(pi.hProcess, 30000);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+    }
+}
+
+static void FirewallRule(bool add, int port) {
+    RunHidden(L"netsh advfirewall firewall delete rule name=\"LogAtlas\"");
+    if (!add) return;
+    wchar_t cmd[512];
+    _snwprintf_s(cmd, 512, _TRUNCATE,
+                 L"netsh advfirewall firewall add rule name=\"LogAtlas\" description=\"LogAtlas: веб-интерфейс для "
+                 L"компьютеров локальной сети\" dir=in action=allow protocol=TCP localport=%d remoteip=LocalSubnet "
+                 L"profile=domain,private",
+                 port);
+    RunHidden(cmd);
+}
+
+// Не хватает прав — просим их у Windows (запрос UAC) и ждём, пока поднятая копия закончит работу.
+static int ElevateAndWait(const wchar_t* action, bool quiet) {
+    wchar_t exe[MAX_PATH * 2];
+    if (!GetModuleFileNameW(nullptr, exe, MAX_PATH * 2)) return 1;
+    std::wstring args = action;
+    if (quiet) args += L" --quiet";
+    SHELLEXECUTEINFOW si{};
+    si.cbSize = sizeof si;
+    si.fMask = SEE_MASK_NOCLOSEPROCESS;
+    si.lpVerb = L"runas";
+    si.lpFile = exe;
+    si.lpParameters = args.c_str();
+    si.nShow = SW_SHOWNORMAL;
+    if (!ShellExecuteExW(&si)) return 1;               // в правах отказано
+    DWORD code = 0;
+    if (si.hProcess) {
+        WaitForSingleObject(si.hProcess, INFINITE);
+        GetExitCodeProcess(si.hProcess, &code);
+        CloseHandle(si.hProcess);
+    }
+    return (int)code;
+}
+
+static SC_HANDLE OpenScmOrElevate(const wchar_t* action, bool quiet, int& code) {
+    SC_HANDLE scm = OpenSCManagerW(nullptr, nullptr, SC_MANAGER_ALL_ACCESS);
+    if (scm) return scm;
+    if (GetLastError() == ERROR_ACCESS_DENIED) {
+        code = ElevateAndWait(action, quiet);
+        return nullptr;
+    }
+    if (!quiet) Msg(L"Не удалось получить доступ к диспетчеру служб Windows.\n\nЗапустите от имени администратора.",
+                    MB_ICONERROR);
+    code = 1;
+    return nullptr;
+}
+
+static bool WaitStopped(SC_HANDLE svc) {
+    SERVICE_STATUS st{};
+    for (int i = 0; i < 40; i++) {                     // до 20 секунд — как в прежнем описании службы
+        if (!QueryServiceStatus(svc, &st)) return true;
+        if (st.dwCurrentState == SERVICE_STOPPED) return true;
+        Sleep(500);
+    }
+    return false;
+}
+
+static int StopService(bool quiet) {
+    int code = 0;
+    SC_HANDLE scm = OpenScmOrElevate(L"--stop-service", quiet, code);
+    if (!scm) return code;                             // права запрошены либо показано сообщение
+    SC_HANDLE svc = OpenServiceW(scm, SERVICE_NAME, SERVICE_ALL_ACCESS);
+    if (svc) {
+        SERVICE_STATUS st{};
+        if (QueryServiceStatus(svc, &st) && st.dwCurrentState != SERVICE_STOPPED)
+            ControlService(svc, SERVICE_CONTROL_STOP, &st);
+        WaitStopped(svc);
+        CloseServiceHandle(svc);
+    }
+    CloseServiceHandle(scm);
+    return 0;
+}
+
+static int InstallService(bool quiet) {
+    int code = 0;
+    SC_HANDLE scm = OpenScmOrElevate(L"--install-service", quiet, code);
+    if (!scm) return code;
+    wchar_t exe[MAX_PATH * 2];
+    if (!GetModuleFileNameW(nullptr, exe, MAX_PATH * 2)) {
+        CloseServiceHandle(scm);
+        return 1;
+    }
+    std::wstring bin = L"\"" + std::wstring(exe) + L"\" --service";
+
+    SC_HANDLE svc = OpenServiceW(scm, SERVICE_NAME, SERVICE_ALL_ACCESS);
+    if (svc) {                                         // переустановка: пути могли измениться
+        SERVICE_STATUS st{};
+        if (QueryServiceStatus(svc, &st) && st.dwCurrentState != SERVICE_STOPPED)
+            ControlService(svc, SERVICE_CONTROL_STOP, &st);
+        WaitStopped(svc);
+        DeleteService(svc);
+        CloseServiceHandle(svc);
+        Sleep(500);
+    }
+    svc = CreateServiceW(scm, SERVICE_NAME, L"LogAtlas", SERVICE_ALL_ACCESS, SERVICE_WIN32_OWN_PROCESS,
+                         SERVICE_AUTO_START, SERVICE_ERROR_NORMAL, bin.c_str(), nullptr, nullptr, nullptr, nullptr,
+                         nullptr);
+    if (!svc) {
+        if (!quiet) Msg(L"Не удалось установить службу LogAtlas.", MB_ICONERROR);
+        CloseServiceHandle(scm);
+        return 1;
+    }
+    SERVICE_DESCRIPTIONW desc{};
+    desc.lpDescription = (LPWSTR)L"LogAtlas — анализатор журналов macOS, Windows и Linux. Веб-интерфейс: "
+                                 L"http://этот-компьютер:8484 (порт — в %ProgramData%\\LogAtlas\\settings.json).";
+    ChangeServiceConfig2W(svc, SERVICE_CONFIG_DESCRIPTION, &desc);
+    SERVICE_DELAYED_AUTO_START_INFO delayed{TRUE};     // запуск после входа в систему — как было у WinSW
+    ChangeServiceConfig2W(svc, SERVICE_CONFIG_DELAYED_AUTO_START_INFO, &delayed);
+    SC_ACTION actions[3] = {{SC_ACTION_RESTART, 10000}, {SC_ACTION_RESTART, 30000}, {SC_ACTION_RESTART, 120000}};
+    SERVICE_FAILURE_ACTIONSW fail{};
+    fail.dwResetPeriod = 3600;
+    fail.cActions = 3;
+    fail.lpsaActions = actions;
+    ChangeServiceConfig2W(svc, SERVICE_CONFIG_FAILURE_ACTIONS, &fail);
+
+    CreateDirectoryW(ServiceDataDir().c_str(), nullptr);
+    CreateDirectoryW((ServiceDataDir() + L"\\logs").c_str(), nullptr);
+    FirewallRule(true, ServicePort());
+    if (!StartServiceW(svc, 0, nullptr) && GetLastError() != ERROR_SERVICE_ALREADY_RUNNING) {
+        if (!quiet) Msg(L"Служба установлена, но не запустилась.", MB_ICONERROR);
+        CloseServiceHandle(svc);
+        CloseServiceHandle(scm);
+        return 1;
+    }
+    CloseServiceHandle(svc);
+    CloseServiceHandle(scm);
+
+    g_port = ServicePort();                            // подождём, пока панель отзовётся, — до минуты
+    bool up = false;
+    for (int i = 0; i < 60; i++) {
+        if (!HttpGet(L"/healthz").empty()) { up = true; break; }
+        Sleep(1000);
+    }
+    if (!quiet) {
+        wchar_t text[512];
+        _snwprintf_s(text, 512, _TRUNCATE,
+                     L"Служба LogAtlas установлена и запущена.\n\nПанель: http://127.0.0.1:%d/\n\n"
+                     L"В LogAtlas нет входа по паролю: открывайте панель только в доверенной сети.",
+                     g_port);
+        Msg(up ? std::wstring(text)
+               : std::wstring(text) + L"\n\nПанель пока не отвечает — загляните в журнал службы:\n" +
+                     ServiceDataDir() + L"\\logs",
+            up ? MB_ICONINFORMATION : MB_ICONWARNING);
+    }
+    return 0;
+}
+
+static int UninstallService(bool quiet) {
+    int code = 0;
+    SC_HANDLE scm = OpenScmOrElevate(L"--uninstall-service", quiet, code);
+    if (!scm) return code;
+    SC_HANDLE svc = OpenServiceW(scm, SERVICE_NAME, SERVICE_ALL_ACCESS);
+    if (svc) {
+        SERVICE_STATUS st{};
+        if (QueryServiceStatus(svc, &st) && st.dwCurrentState != SERVICE_STOPPED)
+            ControlService(svc, SERVICE_CONTROL_STOP, &st);
+        WaitStopped(svc);
+        DeleteService(svc);
+        CloseServiceHandle(svc);
+    }
+    FirewallRule(false, 0);
+    CloseServiceHandle(scm);
+    if (!quiet)
+        Msg(L"Служба LogAtlas удалена.\n\nСобранные журналы остались в папке\n" + ServiceDataDir(),
+            MB_ICONINFORMATION);
+    return 0;
+}
+
+static void SvcReport(DWORD state, DWORD exitCode = NO_ERROR, DWORD hint = 0) {
+    static DWORD checkpoint = 1;
+    g_svcStatus.dwServiceType = SERVICE_WIN32_OWN_PROCESS;
+    g_svcStatus.dwCurrentState = state;
+    g_svcStatus.dwWin32ExitCode = exitCode;
+    g_svcStatus.dwWaitHint = hint;
+    g_svcStatus.dwControlsAccepted =
+        (state == SERVICE_START_PENDING) ? 0 : (SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SHUTDOWN);
+    g_svcStatus.dwCheckPoint = (state == SERVICE_RUNNING || state == SERVICE_STOPPED) ? 0 : checkpoint++;
+    if (g_svcHandle) SetServiceStatus(g_svcHandle, &g_svcStatus);
+}
+
+static DWORD WINAPI SvcCtrl(DWORD ctrl, DWORD, LPVOID, LPVOID) {
+    if (ctrl == SERVICE_CONTROL_STOP || ctrl == SERVICE_CONTROL_SHUTDOWN) {
+        SvcReport(SERVICE_STOP_PENDING, NO_ERROR, 20000);
+        g_svcStopping = true;
+        if (g_svcJob) { CloseHandle(g_svcJob); g_svcJob = nullptr; }   // KILL_ON_JOB_CLOSE: сервер и разбор
+        if (g_svcChild) WaitForSingleObject(g_svcChild, 15000);
+        return NO_ERROR;
+    }
+    if (ctrl == SERVICE_CONTROL_INTERROGATE) {
+        SvcReport(g_svcStatus.dwCurrentState);
+        return NO_ERROR;
+    }
+    return ERROR_CALL_NOT_IMPLEMENTED;
+}
+
+static void WINAPI ServiceMain(DWORD, LPWSTR*) {
+    g_svcHandle = RegisterServiceCtrlHandlerExW(SERVICE_NAME, SvcCtrl, nullptr);
+    if (!g_svcHandle) return;
+    SvcReport(SERVICE_START_PENDING, NO_ERROR, 30000);
+    g_data = ServiceDataDir();
+    CreateDirectoryW(g_data.c_str(), nullptr);
+    CreateDirectoryW((g_data + L"\\logs").c_str(), nullptr);
+    Log(L"служба: запуск");
+    std::wstring py = g_root + L"\\python\\pythonw.exe";
+    std::wstring cl = L"\"" + py + L"\" \"" + g_root + L"\\launcher.pyw\" --service";
+    std::vector<wchar_t> buf(cl.begin(), cl.end());
+    buf.push_back(0);
+    STARTUPINFOW si{};
+    si.cb = sizeof si;
+    PROCESS_INFORMATION pi{};
+    if (!CreateProcessW(py.c_str(), buf.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, g_root.c_str(), &si,
+                        &pi)) {
+        Log(L"служба: не удалось запустить сервер");
+        SvcReport(SERVICE_STOPPED, ERROR_SERVICE_SPECIFIC_ERROR);
+        return;
+    }
+    CloseHandle(pi.hThread);
+    g_svcChild = pi.hProcess;
+    g_svcJob = CreateJobObjectW(nullptr, nullptr);     // остановка службы завершает сервер и процессы разбора
+    if (g_svcJob) {
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION li{};
+        li.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        SetInformationJobObject(g_svcJob, JobObjectExtendedLimitInformation, &li, sizeof li);
+        AssignProcessToJobObject(g_svcJob, g_svcChild);
+    }
+    Log(L"служба: сервер запущен");
+    SvcReport(SERVICE_RUNNING);
+    WaitForSingleObject(g_svcChild, INFINITE);
+    DWORD code = 0;
+    GetExitCodeProcess(g_svcChild, &code);
+    Log(L"служба: сервер завершился, код " + std::to_wstring(code));
+    if (g_svcJob) { CloseHandle(g_svcJob); g_svcJob = nullptr; }
+    CloseHandle(g_svcChild);
+    g_svcChild = nullptr;
+    SvcReport(SERVICE_STOPPED, (g_svcStopping || code == 0) ? NO_ERROR : ERROR_SERVICE_SPECIFIC_ERROR);
+}
+
+static int RunServiceMode() {
+    SERVICE_TABLE_ENTRYW table[] = {{(LPWSTR)SERVICE_NAME, ServiceMain}, {nullptr, nullptr}};
+    if (StartServiceCtrlDispatcherW(table)) return 0;
+    if (GetLastError() != ERROR_FAILED_SERVICE_CONTROLLER_CONNECT) return 1;
+    // запустили вручную, а не диспетчером служб: работаем как обычный сервер, пока не закроют
+    g_data = ServiceDataDir();
+    CreateDirectoryW(g_data.c_str(), nullptr);
+    Log(L"служба: запущена вручную (без диспетчера служб)");
+    std::wstring py = g_root + L"\\python\\pythonw.exe";
+    std::wstring cl = L"\"" + py + L"\" \"" + g_root + L"\\launcher.pyw\" --service";
+    std::vector<wchar_t> buf(cl.begin(), cl.end());
+    buf.push_back(0);
+    STARTUPINFOW si{};
+    si.cb = sizeof si;
+    PROCESS_INFORMATION pi{};
+    if (!CreateProcessW(py.c_str(), buf.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, g_root.c_str(), &si,
+                        &pi))
+        return 1;
+    CloseHandle(pi.hThread);
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    CloseHandle(pi.hProcess);
+    return 0;
+}
+
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR cmdLine, int nShow) {
     g_inst = inst;
     g_noDialogs = !Env(L"LOGATLAS_NO_DIALOGS").empty();
@@ -579,9 +898,14 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR cmdLine, int nShow) {
     g_root.assign(exe, n);
     g_root.erase(g_root.find_last_of(L'\\'));
 
+    // служба Windows: установка, удаление, остановка и работа под диспетчером служб
+    if (HasArg(cmdLine, L"--install-service")) return InstallService(!HasArg(cmdLine, L"--quiet"));
+    if (HasArg(cmdLine, L"--uninstall-service")) return UninstallService(!HasArg(cmdLine, L"--quiet"));
+    if (HasArg(cmdLine, L"--stop-service")) return StopService(!HasArg(cmdLine, L"--quiet"));
+    if (HasArg(cmdLine, L"--service")) return RunServiceMode();
+
     // режимы без окна — сразу в launcher.pyw
-    if (HasArg(cmdLine, L"--quit") || HasArg(cmdLine, L"--tray") || HasArg(cmdLine, L"--autostart") ||
-        HasArg(cmdLine, L"--service")) {
+    if (HasArg(cmdLine, L"--quit") || HasArg(cmdLine, L"--tray") || HasArg(cmdLine, L"--autostart")) {
         std::wstring args = cmdLine;
         size_t p;
         while ((p = args.find(L"--tray")) != std::wstring::npos) args.erase(p, 6);

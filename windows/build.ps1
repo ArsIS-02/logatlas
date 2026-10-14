@@ -1,4 +1,4 @@
-﻿<#
+<#
 Сборка LogAtlas для Windows (x64 или ARM64): папка dist\LogAtlas-<арх>, установщик и переносной zip.
 
   powershell -ExecutionPolicy Bypass -File windows\build.ps1 [-Arch x64|arm64] [-Version 1.4.0] [-SkipInstaller]
@@ -6,7 +6,7 @@
 Собирается на компьютере той же архитектуры (в GitHub Actions: windows-latest и windows-11-arm).
 Нужно: Python 3.12 этой архитектуры в PATH (встроенный Python берётся той же версии), MSVC (Developer
 PowerShell или ilammy/msvc-dev-cmd), Inno Setup 6.3+ (ISCC.exe) и интернет: python.org (встроенный Python),
-PyPI (зависимости), nuget.org (заголовки WebView2), GitHub (WinSW).
+PyPI (зависимости), nuget.org (заголовки WebView2).
 
 Файл сохранён в UTF-8 с BOM: без BOM Windows PowerShell 5.1 читает его как ANSI и ломает кириллицу.
 #>
@@ -14,8 +14,7 @@ param(
   [ValidateSet('', 'x64', 'arm64')]
   [string]$Arch = '',
   [string]$Version = '',
-  [switch]$SkipInstaller,
-  [string]$WinSWVersion = 'v2.12.0'
+  [switch]$SkipInstaller
 )
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -85,21 +84,10 @@ Get-ChildItem $dist -Recurse -Directory -Filter '__pycache__' | Remove-Item -Rec
 Copy-Item windows\launcher.pyw, windows\logatlas.ico, LICENSE, THIRD_PARTY.txt $dist
 Copy-Item windows\README-Windows.txt (Join-Path $dist 'README.txt')
 Copy-Item windows\install-service.cmd, windows\uninstall-service.cmd $dist
-Copy-Item windows\LogAtlasService.xml, windows\service.ps1 (Join-Path $dist 'service')
 
-# --- WinSW: служба Windows. x64 — самодостаточная сборка; ARM64 — сборка для .NET Framework 4.6.1+
-#     (AnyCPU, работает на ARM64 без эмуляции; .NET Framework 4.8.1 входит в Windows 11)
-Step "WinSW $WinSWVersion"
-$winsw = Join-Path $dist 'service\LogAtlasService.exe'
-$assets = if ($Arch -eq 'arm64') { @('WinSW.NET461.exe') } else { @('WinSW-x64.exe', 'WinSW.NET461.exe') }
-$got = $false
-foreach ($a in $assets) {
-  try {
-    Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/winsw/winsw/releases/download/$WinSWVersion/$a" -OutFile $winsw
-    $got = $true; Write-Host "   $a"; break
-  } catch { Write-Host "   $a не скачался: $($_.Exception.Message)" -ForegroundColor Yellow }
-}
-if (-not $got) { throw 'WinSW не скачался' }
+# Службу Windows ставит сам LogAtlas.exe (CreateService + ServiceMain в LogAtlas.cpp). Сторонняя
+# обёртка служб (WinSW) и скрипт service.ps1 из поставки убраны: антивирусы ругались и на WinSW,
+# и на запуск PowerShell с обходом политики выполнения при установке службы.
 
 # --- WebView2 SDK (заголовки и статический загрузчик) из NuGet
 Step 'WebView2 SDK'
