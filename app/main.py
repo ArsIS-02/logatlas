@@ -731,11 +731,13 @@ def _is_local(req: Request) -> bool:
     return (req.client.host if req.client else "") in ("127.0.0.1", "::1")
 
 
-def windows_local_logs():
+def windows_local_logs(req: Request):
     """Вернуть список доступных журналов Windows с метаданными.
     Запускает wevtutil enum-logs и enum-channel-list, возвращает JSON."""
     if not winlocal.ENABLED:
         return _err("Доступно только в приложении LogAtlas для Windows", 404)
+    if not _is_local(req):
+        return _err("Список журналов этого компьютера доступен только с него самого", 403)
 
     # Дефолтные журналы с описаниями (как в GUI)
     log_defs = {
@@ -756,7 +758,7 @@ def windows_local_logs():
         # Получаем список журналов через wevtutil
         result = subprocess.run(
             ['wevtutil.exe', 'enum-logs'],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, errors="replace", timeout=30,
             creationflags=0x08000000  # CREATE_NO_WINDOW
         )
         if result.returncode == 0:
@@ -770,7 +772,7 @@ def windows_local_logs():
                     try:
                         info_result = subprocess.run(
                             ['wevtutil.exe', 'gli', name],
-                            capture_output=True, text=True, timeout=10,
+                            capture_output=True, text=True, errors="replace", timeout=10,
                             creationflags=0x08000000
                         )
                         if info_result.returncode == 0:
@@ -786,14 +788,14 @@ def windows_local_logs():
                     info['name'] = name
                     info['exists'] = True
                     logs.append(info)
-    except (OSError, subprocess.SubprocessError) as e:
+    except Exception as e:  # noqa: BLE001  — список журналов не должен ронять запрос
         log.warning("cannot enumerate Windows logs: %s", e)
 
     # Добавляем журналы из channel-list (дополнительные)
     try:
         result = subprocess.run(
             ['wevtutil.exe', 'enum-channels'],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, errors="replace", timeout=30,
             creationflags=0x08000000
         )
         if result.returncode == 0:
