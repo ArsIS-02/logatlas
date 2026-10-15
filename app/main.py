@@ -761,33 +761,31 @@ def windows_local_logs():
         )
         if result.returncode == 0:
             for line in result.stdout.splitlines():
-                line = line.strip()
-                if not line or line.startswith('#'):
+                name = line.strip()
+                if not name or name.startswith('#'):
                     continue
-                # Формат: name: <имя>
-                if line.startswith('name:'):
-                    name = line[5:].strip()
-                    if name in log_defs:
-                        info = log_defs[name]
-                        # Получаем количество записей и размер
-                        try:
-                            info_result = subprocess.run(
-                                ['wevtutil.exe', 'gli', name],
-                                capture_output=True, text=True, timeout=10,
-                                creationflags=0x08000000
-                            )
-                            if info_result.returncode == 0:
-                                for il in info_result.stdout.splitlines():
-                                    if 'numberOfLogRecords:' in il:
-                                        try: info['records'] = int(il.split(':')[1].strip())
-                                        except: info['records'] = 0
-                                    elif 'fileSize:' in il:
-                                        try: info['size'] = int(il.split(':')[1].strip())
-                                        except: info['size'] = 0
-                        except Exception:  # noqa: BLE001
-                            pass
-                        info['exists'] = True
-                        logs.append(info)
+                if name in log_defs:
+                    info = dict(log_defs[name])
+                    # Получаем количество записей и размер
+                    try:
+                        info_result = subprocess.run(
+                            ['wevtutil.exe', 'gli', name],
+                            capture_output=True, text=True, timeout=10,
+                            creationflags=0x08000000
+                        )
+                        if info_result.returncode == 0:
+                            for il in info_result.stdout.splitlines():
+                                if 'numberOfLogRecords:' in il:
+                                    try: info['records'] = int(il.split(':')[1].strip())
+                                    except Exception: info['records'] = 0
+                                elif 'fileSize:' in il:
+                                    try: info['size'] = int(il.split(':')[1].strip())
+                                    except Exception: info['size'] = 0
+                    except Exception:  # noqa: BLE001
+                        pass
+                    info['name'] = name
+                    info['exists'] = True
+                    logs.append(info)
     except (OSError, subprocess.SubprocessError) as e:
         log.warning("cannot enumerate Windows logs: %s", e)
 
@@ -800,18 +798,18 @@ def windows_local_logs():
         )
         if result.returncode == 0:
             for line in result.stdout.splitlines():
-                line = line.strip()
-                if line.startswith('name:'):
-                    name = line[5:].strip()
-                    if name not in log_defs and name not in [l.get('name') for l in logs]:
-                        logs.append({
-                            'name': name,
-                            'label': name.split('/')[-1],
-                            'desc': '',
-                            'exists': True,
-                            'records': None,
-                            'size': None,
-                        })
+                name = line.strip()
+                if not name or name.startswith('#'):
+                    continue
+                if name not in log_defs and name not in [l.get('name') for l in logs]:
+                    logs.append({
+                        'name': name,
+                        'label': name.split('/')[-1],
+                        'desc': '',
+                        'exists': True,
+                        'records': None,
+                        'size': None,
+                    })
     except Exception:  # noqa: BLE001
         pass
 

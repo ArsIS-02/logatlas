@@ -353,7 +353,6 @@ export async function renderHome(view, { platform, cases, meta, refresh }) {
         });
       } else {
         // macOS
-        box.classList.toggle('hidden');
         mount(box, h`<label class="lbl">Период<select class="field" id="local-days">
             <option value="1">последние сутки</option><option value="3" selected>3 дня</option><option value="7">неделя</option>
             <option value="14">2 недели</option><option value="30">30 дней</option>

@@ -126,6 +126,47 @@ podman compose pull && podman compose up -d          # podman-compose или pod
 
 Сборка из исходников: `podman compose up -d --build`. Журнал: `podman logs -f logatlas`; остановить: `podman compose down` (или `podman stop logatlas`).
 
+#### Обновление существующего контейнера (пошагово)
+
+Если контейнер уже работает, но вы не помните, с какими параметрами его запускали, сначала узнайте их — иначе при пересоздании можно случайно сменить порт или потерять том с данными.
+
+```bash
+# 1) имя контейнера и порты
+podman ps -a
+# если список пуст — контейнер поднят от root, тогда везде добавляйте sudo:
+sudo podman ps -a
+
+# 2) сеть и тома (папка с данными)
+podman inspect logatlas --format 'сеть: {{.HostConfig.NetworkMode}}{{range .Mounts}} | том: {{.Source}} -> {{.Destination}}{{end}}'
+```
+
+Как читать вывод:
+
+- **`сеть: host`** — порт не пробрасывается (`-p` не нужен), панель слушает порт 8484 прямо на хосте.
+- **`том: /путь/... -> /data`** — это папка или том Podman с журналами. Её надо подставить в команду ниже вместо `ТОМ`.
+- Если тома два — данные LogAtlas всегда в том, что смонтирован в **`/data`**.
+
+Обновление (rootless; для root — те же команды через `sudo`):
+
+```bash
+podman pull ghcr.io/arsis-02/logatlas:2.0.0
+podman stop logatlas && podman rm logatlas
+podman run -d --name logatlas --restart unless-stopped \
+  --network=host \
+  -v ТОМ:/data \
+  ghcr.io/arsis-02/logatlas:2.0.0
+```
+
+Пример, где данные лежат в томе Podman `fe2691…` (сеть `host`):
+
+```bash
+sudo podman run -d --name logatlas --restart unless-stopped --network=host \
+  -v fe2691cfce2b576b7595ab0d22315ec3f235d40d315e64a6b8fc248c9505ef7b:/data \
+  ghcr.io/arsis-02/logatlas:2.0.0
+```
+
+После пересоздания проверьте: `podman logs -f logatlas` и `curl -s http://localhost:8484/healthz` (ответ — `ok`). Данные сборов сохраняются, потому что остаются в томе `/data`.
+
 ### Windows без Docker
 
 К каждому [релизу](https://github.com/ArsIS-02/logatlas/releases) приложено оконное приложение для Windows 10 (1809 и новее) и Windows 11 — для процессоров Intel/AMD (`x64`) и ARM (`arm64`, например Snapdragon). Python встроен, ставить ничего не нужно:
