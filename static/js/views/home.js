@@ -299,9 +299,9 @@ export async function renderHome(view, { platform, cases, meta, refresh }) {
                 <div class="log-desc">${log.desc || ''}</div>
               </div>
               <div class="log-meta">${log.records != null ? fmtN(log.records) + ' соб.' : ''} ${log.size ? formatSize(log.size) : ''}</div>
-            </label>`).join('')}</div>
+            </label>`)}</div>
           <div class="period-section">
-            <div class="period-presets">${presets.slice(0, -1).map((p, i) => h`<button type="button" class="btn small period-preset" data-hours="${PRESET_HOURS[i]}">${p}</button>`).join('')}
+            <div class="period-presets">${presets.slice(0, -1).map((p, i) => h`<button type="button" class="btn small period-preset" data-hours="${PRESET_HOURS[i]}">${p}</button>`)}
               <button type="button" class="btn small period-preset" data-custom="1">Свой период</button>
             </div>
             <div class="date-range hidden">
@@ -352,15 +352,35 @@ export async function renderHome(view, { platform, cases, meta, refresh }) {
           startLocal(body);
         });
       } else {
-        // macOS
-        mount(box, h`<label class="lbl">Период<select class="field" id="local-days">
-            <option value="1">последние сутки</option><option value="3" selected>3 дня</option><option value="7">неделя</option>
-            <option value="14">2 недели</option><option value="30">30 дней</option>
-            <option value="custom">Свой период</option></select></label>
-          <label class="lbl hidden" id="lfrom-wrap">С<input class="field" type="datetime-local" id="lfrom"></label>
-          <label class="lbl hidden" id="lto-wrap">По<input class="field" type="datetime-local" id="lto"></label>
-          <button class="btn primary" type="button" id="local-go">Собрать и разобрать</button>
-          <span class="muted local-hint">Unified log без самых шумных подсистем, питание и установки. macOS спросит пароль администратора — LogAtlas его не видит.</span>`);
+        // macOS: журналы выбираются чекбоксами, период — пресет или свои даты
+        mount(box, h`<div class="win-collect-form"><div class="loading"><span class="spinner"></span> Загрузка списка журналов…</div></div>`);
+        let macLogs = [];
+        try {
+          macLogs = await api.get('/api/local/macos/logs');
+        } catch (e) {
+          mount(box, h`<div class="win-collect-form"><div class="note err">Не удалось загрузить журналы: ${e.message}</div></div>`);
+          return;
+        }
+        mount(box, h`<div class="win-collect-form">
+          <h3>Журналы macOS</h3>
+          <div class="logs-list">${macLogs.map((log) => h`<label class="log-item">
+              <input type="checkbox" data-name="${log.name}" ${log.default ? raw('checked') : ''}>
+              <div class="log-info">
+                <div class="log-name">${log.label || log.name}</div>
+                <div class="log-desc">${log.desc || ''}</div>
+              </div>
+            </label>`)}</div>
+          <div class="period-section">
+            <label class="lbl">Период<select class="field" id="local-days">
+                <option value="1">последние сутки</option><option value="3" selected>3 дня</option><option value="7">неделя</option>
+                <option value="14">2 недели</option><option value="30">30 дней</option>
+                <option value="custom">Свой период</option></select></label>
+            <label class="lbl hidden" id="lfrom-wrap">С<input class="field" type="datetime-local" id="lfrom"></label>
+            <label class="lbl hidden" id="lto-wrap">По<input class="field" type="datetime-local" id="lto"></label>
+            <div class="collect-hint">macOS спросит пароль администратора — LogAtlas его не видит.</div>
+            <button class="btn primary collect-btn" type="button" id="local-go">Собрать и разобрать</button>
+          </div>
+        </div>`);
         const lmode = $('#local-days');
         const lfrom = $('#lfrom');
         const lto = $('#lto');
@@ -375,6 +395,9 @@ export async function renderHome(view, { platform, cases, meta, refresh }) {
           } else showLocalDates(false);
         });
         $('#local-go').addEventListener('click', () => {
+          const checked = box.querySelectorAll('.log-item input:checked');
+          if (!checked.length) { toast('Выберите хотя бы один журнал'); return; }
+          const body = { logs: Array.from(checked).map((cb) => cb.dataset.name) };
           if (lmode.value === 'custom') {
             const a = fromLocal(lfrom.value);
             const b = fromLocal(lto.value);
@@ -382,8 +405,10 @@ export async function renderHome(view, { platform, cases, meta, refresh }) {
               toast('Проверьте период: начало должно быть раньше конца');
               return;
             }
-            startLocal({ since: a, until: b });
-          } else startLocal({ days: +lmode.value });
+            body.since = a;
+            body.until = b;
+          } else body.days = +lmode.value;
+          startLocal(body);
         });
       }
     });

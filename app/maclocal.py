@@ -101,13 +101,20 @@ def _watch_progress(jid: str, cid: str, path: str, stop: threading.Event):
         stop.wait(1)
 
 
-def _run(jid: str, cid: str, since: int, until: int, out_dir: str):
+def _run(jid: str, cid: str, since: int, until: int, out_dir: str, sources=None):
     script = os.path.join(collect.SCRIPTS_DIR, "collect-macos.sh")
     archive = os.path.join(out_dir, "this-mac-logs.tar")
     progress = os.path.join(out_dir, "progress.log")
     uid = os.getuid()
-    cmd = (f"/bin/bash {_sh(script)} --stream --since @{since} --until @{until} > {_sh(archive)} 2> {_sh(progress)}; "
-           f"rc=$?; chown {uid} {_sh(archive)} {_sh(progress)} 2>/dev/null; exit $rc")
+    src = ""
+    if sources:
+        # журналы выбираются в панели: сборщик принимает их списком id через --sources
+        clean = [re.sub(r"[^a-z0-9_]", "", str(x).lower()) for x in sources]
+        clean = [x for x in clean if x]
+        if clean:
+            src = " --sources " + ",".join(clean)
+    cmd = (f"/bin/bash {_sh(script)} --stream{src} --since @{since} --until @{until} > {_sh(archive)} "
+           f"2> {_sh(progress)}; rc=$?; chown {uid} {_sh(archive)} {_sh(progress)} 2>/dev/null; exit $rc")
     osa = (f"do shell script {_applescript_str(cmd)} with administrator privileges "
            f"with prompt {_applescript_str('LogAtlas собирает журналы этого Mac: нужны права администратора, чтобы прочитать системные журналы.')}")
     stop = threading.Event()
@@ -154,7 +161,7 @@ def _run(jid: str, cid: str, since: int, until: int, out_dir: str):
         shutil.rmtree(out_dir, ignore_errors=True)
 
 
-def start(days: int = 3, since=None, until=None) -> str:
+def start(days: int = 3, since=None, until=None, sources=None) -> str:
     """Запустить сбор. Период задаётся либо готовыми границами (since/until в секундах), либо числом
     суток назад от сейчас — тогда границы считаются здесь."""
     if not ENABLED:
@@ -186,7 +193,7 @@ def start(days: int = 3, since=None, until=None) -> str:
     with _lock:
         JOBS[jid] = {"id": jid, "state": "starting", "case": cid, "error": None, "started": time.time(),
                      "since": since, "until": until}
-    threading.Thread(target=_run, args=(jid, cid, since, until, out_dir), daemon=True,
+    threading.Thread(target=_run, args=(jid, cid, since, until, out_dir, sources), daemon=True,
                      name=f"local-{jid}").start()
     return jid
 

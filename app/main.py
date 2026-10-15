@@ -831,6 +831,32 @@ def windows_local_logs(req: Request):
     return J(logs)
 
 
+def macos_local_logs(req: Request):
+    """Список журналов, которые умеет собирать collect-macos.sh: id, название, описание, по умолчанию.
+    Читаем его из самого сборщика (SRC_LIST), чтобы список в панели не расходился со скриптом."""
+    if not maclocal.ENABLED:
+        return _err("Доступно только в приложении LogAtlas для macOS", 404)
+    if not _is_local(req):
+        return _err("Список журналов этого компьютера доступен только с него самого", 403)
+    path = os.path.join(collect.SCRIPTS_DIR, "collect-macos.sh")
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            text = f.read()
+    except OSError:
+        return _err("Не найден сборщик scripts/collect-macos.sh — переустановите LogAtlas")
+    m = re.search(r"SRC_LIST='(.*?)'\n", text, re.S)
+    out = []
+    if m:
+        for line in m.group(1).splitlines():
+            parts = line.split("|")
+            if len(parts) >= 4 and parts[0].strip():
+                out.append({"name": parts[0].strip(), "label": parts[1].strip(),
+                            "default": parts[2].strip() == "1", "desc": parts[3].strip()})
+    if not out:
+        return _err("Не удалось прочитать список журналов сборщика")
+    return J(out)
+
+
 async def local_collect(req: Request):
     if not winlocal.ENABLED and not maclocal.ENABLED:
         return _err("Доступно только в приложении LogAtlas для Windows и macOS", 404)
@@ -850,7 +876,8 @@ async def local_collect(req: Request):
             since, until = _period(body.get("since"), body.get("until"))
             jid = maclocal.start(body.get("days", 3),
                                  since // 1000 if since else None,
-                                 until // 1000 if until else None)
+                                 until // 1000 if until else None,
+                                 sources=body.get("logs"))
     except RuntimeError as e:
         return _err(str(e))
     j = winlocal.status(jid) or maclocal.status(jid) or {}
@@ -884,6 +911,7 @@ routes = [
     Route("/healthz", health),
     Route("/api/status", status),
     Route("/api/local/windows/logs", windows_local_logs, methods=["GET"]),
+    Route("/api/local/macos/logs", macos_local_logs, methods=["GET"]),
     Route("/favicon.ico", lambda r: _icon("icons/favicon.ico", "image/x-icon")),
     Route("/apple-touch-icon.png", lambda r: _icon("icons/apple-touch-icon.png", "image/png")),
     Route("/apple-touch-icon-precomposed.png", lambda r: _icon("icons/apple-touch-icon.png", "image/png")),
