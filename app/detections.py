@@ -118,6 +118,11 @@ AGG_RULES = {
 }
 
 ALL = {r[0]: {"id": r[0], "severity": r[1], "title": r[2], "desc": r[3], "mitre": r[5]} for r in RULES}
+def _RULES_EN():
+    from .i18n import RULES_EN
+    return RULES_EN
+
+
 for k, (sev, title, desc, mitre) in AGG_RULES.items():
     ALL[k] = {"id": k, "severity": sev, "title": title, "desc": desc, "mitre": mitre}
 
@@ -133,13 +138,17 @@ def _susp_sql():
     return " OR ".join(parts)
 
 
-def meta(rule_id: str) -> dict:
+def meta(rule_id: str, lang: str = "ru") -> dict:
     """Сведения о правиле: встроенное или импортированное правило Sigma."""
     m = ALL.get(rule_id)
     if m is None and rule_id.startswith("sigma:"):
         from . import sigma
         m = sigma.meta(rule_id)
-    return m or {"id": rule_id, "severity": "info", "title": rule_id, "desc": ""}
+    m = m or {"id": rule_id, "severity": "info", "title": rule_id, "desc": ""}
+    if lang == "en" and rule_id in _RULES_EN():
+        en = _RULES_EN()[rule_id]
+        m = {**m, "title": en[0], "desc": en[1]}
+    return m
 
 
 def run(con) -> dict:

@@ -24,6 +24,7 @@ from starlette.staticfiles import StaticFiles
 from . import analytics, collect, compare, coverage, db, detections, ingest, maclocal, mitre, sigma, winlocal
 from .parsers import SUPPORTED
 from .parsers.base import CATEGORIES
+from .i18n import CATEGORIES_EN, lang_of
 from .timeutil import fmt_tz, ms_to_str
 
 VERSION = "1.9.0"
@@ -129,8 +130,15 @@ async def index(req):
 
 
 def meta(req):
-    return J({"version": VERSION, "categories": CATEGORIES, "supported": SUPPORTED,
-              "rules": list(detections.ALL.values()), "inbox": db.INBOX_DIR, "runtime": RUNTIME,
+    lang = lang_of(req)
+    cats = {k: CATEGORIES_EN.get(k, v) for k, v in CATEGORIES.items()} if lang == "en" else CATEGORIES
+    rules = list(detections.ALL.values())
+    if lang == "en":
+        from .i18n import RULES_EN
+        rules = [{**r, "title": RULES_EN[r["id"]][0], "desc": RULES_EN[r["id"]][1]} if r["id"] in RULES_EN else r
+                 for r in rules]
+    return J({"version": VERSION, "categories": cats, "supported": SUPPORTED,
+              "rules": rules, "inbox": db.INBOX_DIR, "runtime": RUNTIME,
               "log_hint": LOG_HINT, "local_collect": _local_kind(),
               "host": (os.environ.get("COMPUTERNAME") or "") if winlocal.ENABLED
               else maclocal.host() if maclocal.ENABLED else ""})
@@ -310,13 +318,13 @@ def entity_counts(req, con, case):
 @_with_case
 def findings(req, con, case):
     t0, t1 = _rng(req)
-    return J(analytics.findings_summary(con, t0, t1))
+    return J(analytics.findings_summary(con, t0, t1, lang_of(req)))
 
 
 @_with_case
 def finding(req, con, case):
     t0, t1 = _rng(req)
-    return J(analytics.finding_detail(con, req.path_params["rule"], t0, t1))
+    return J(analytics.finding_detail(con, req.path_params["rule"], t0, t1, lang=lang_of(req)))
 
 
 @_with_case
@@ -327,7 +335,7 @@ def do_search(req, con, case):
     order = req.query_params.get("order", "desc")
     t = time.time()
     try:
-        res = analytics.do_search(con, q, t0, t1, page=max(page, 0), size=100, order=order)
+        res = analytics.do_search(con, q, t0, t1, page=max(page, 0), size=100, order=order, lang=lang_of(req))
     except Exception as e:  # noqa: BLE001
         return _err(f"Ошибка запроса: {e}")
     res["took_ms"] = int((time.time() - t) * 1000)
@@ -364,7 +372,7 @@ def export_csv(req):
 
 @_with_case
 def get_event(req, con, case):
-    e = analytics.event(con, int(req.path_params["eid"]))
+    e = analytics.event(con, int(req.path_params["eid"]), lang_of(req))
     if not e:
         return _err("Событие не найдено", 404)
     if e.get("extra"):

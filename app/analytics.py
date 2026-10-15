@@ -299,20 +299,20 @@ def processes(con, t0=None, t1=None, limit=400):
 
 
 # ---------------------------------------------------------------------------
-def findings_summary(con, t0=None, t1=None):
+def findings_summary(con, t0=None, t1=None, lang="ru"):
     w, p = range_clause(t0, t1, "e")
     rows = con.execute(
         f"SELECT f.rule, count(*) n, min(e.t) first, max(e.t) last, count(DISTINCT f.grp) groups "
         f"FROM findings f JOIN events e ON e.id = f.event_id WHERE {w} GROUP BY f.rule", p).fetchall()
     out = []
     for r in rows:
-        meta = detections.meta(r["rule"])
+        meta = detections.meta(r["rule"], lang)
         out.append({**meta, "n": r["n"], "first": r["first"], "last": r["last"], "groups": r["groups"]})
     out.sort(key=lambda x: (detections.SEV_ORDER.get(x["severity"], 9), -x["n"]))
     return out
 
 
-def finding_detail(con, rule, t0=None, t1=None, limit=200):
+def finding_detail(con, rule, t0=None, t1=None, limit=200, lang="ru"):
     w, p = range_clause(t0, t1, "e")
     groups = [dict(r) for r in con.execute(
         f"SELECT coalesce(f.grp, e.action, '—') AS name, count(*) n, min(e.t) first, max(e.t) last "
@@ -322,14 +322,14 @@ def finding_detail(con, rule, t0=None, t1=None, limit=200):
         f"SELECT e.id, e.t, e.source, e.process, e.user, e.level, e.category, e.action, e.subject, "
         f"substr(e.message, 1, 400) AS message FROM findings f JOIN events e ON e.id=f.event_id "
         f"WHERE f.rule=? AND {w} ORDER BY e.t DESC LIMIT ?", [rule] + p + [limit])]
-    return {"rule": detections.meta(rule), "groups": groups, "events": events}
+    return {"rule": detections.meta(rule, lang), "groups": groups, "events": events}
 
 
 # ---------------------------------------------------------------------------
 ROW_COLS = "id, t, source, host, process, pid, user, level, category, action, subject, code, substr(message, 1, 600) AS message"
 
 
-def do_search(con, q, t0=None, t1=None, page=0, size=100, order="desc"):
+def do_search(con, q, t0=None, t1=None, page=0, size=100, order="desc", lang="ru"):
     search.register(con)
     where, params, terms = search.parse(q)
     w, p = range_clause(t0, t1)
@@ -383,12 +383,12 @@ def search_iter(con, q, t0=None, t1=None, limit=1_000_000):
         f"WHERE {w} AND ({where}) ORDER BY t LIMIT ?", p + params + [limit])
 
 
-def event(con, eid):
+def event(con, eid, lang="ru"):
     r = con.execute("SELECT * FROM events WHERE id=?", (eid,)).fetchone()
     if not r:
         return None
     d = dict(r)
-    d["rules"] = [detections.meta(x[0]) for x in
+    d["rules"] = [detections.meta(x[0], lang) for x in
                   con.execute("SELECT rule FROM findings WHERE event_id=?", (eid,))]
     return d
 
