@@ -5,7 +5,7 @@
 ; Службу Windows ставит сам LogAtlas.exe (--install-service): сторонней обёртки служб и PowerShell в поставке нет.
 
 #ifndef AppVer
-  #define AppVer "1.8.6"
+  #define AppVer "2.0.0"
 #endif
 #ifndef Arch
   #define Arch "x64"

@@ -27,7 +27,7 @@ from .parsers.base import CATEGORIES
 from .i18n import CATEGORIES_EN, lang_of
 from .timeutil import fmt_tz, ms_to_str
 
-VERSION = "1.9.0"
+VERSION = "2.0.0"
 STATIC = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
 log = logging.getLogger("logatlas")
 
