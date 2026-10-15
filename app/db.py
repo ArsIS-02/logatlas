@@ -88,15 +88,92 @@ def case_path(case_id: str) -> str:
     return os.path.join(CASES_DIR, f"{case_id}.db")
 
 
+def total_mem_mb() -> int:
+    """Оперативная память машины в мегабайтах (0 — если определить не удалось)."""
+    try:                                   # Linux
+        with open("/proc/meminfo", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("MemTotal:"):
+                    return int(line.split()[1]) // 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    try:                                   # macOS
+        import subprocess
+        r = subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, timeout=5)
+        if r.returncode == 0 and r.stdout.strip().isdigit():
+            return int(r.stdout.strip()) // 1048576
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+    try:                                   # Windows
+        import ctypes
+
+        class MemStatus(ctypes.Structure):
+            _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                        ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                        ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                        ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                        ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+        st = MemStatus()
+        st.dwLength = ctypes.sizeof(MemStatus)
+        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(st)):
+            return int(st.ullTotalPhys // 1048576)
+    except Exception:  # noqa: BLE001
+        pass
+    return 0
+
+
+def _env_mb(name: str) -> int:
+    v = os.environ.get(name, "")
+    return int(v) if v.isdigit() else 0
+
+
+def page_cache_mb() -> int:
+    """Кэш страниц SQLite: четверть памяти, но не меньше 256 МБ и не больше 2 ГБ."""
+    env = _env_mb("LOGATLAS_DB_CACHE_MB")
+    if env:
+        return env
+    mem = total_mem_mb()
+    return max(256, min(2048, mem // 4)) if mem else 512
+
+
+def mmap_mb() -> int:
+    """Отображение файла базы в память: половина памяти, в пределах 512 МБ … 4 ГБ."""
+    env = _env_mb("LOGATLAS_DB_MMAP_MB")
+    if env:
+        return env
+    mem = total_mem_mb()
+    return max(512, min(4096, mem // 2)) if mem else 2048
+
+
+def worker_cache_mb() -> int:
+    """Кэш страниц для отдельного процесса разбора: больше — меньше обращений к диску."""
+    env = _env_mb("LOGATLAS_WORKER_CACHE_MB")
+    if env:
+        return env
+    mem = total_mem_mb()
+    return 128 if not mem or mem >= 8192 else 64
+
+
+def tune(con, cache_mb: int | None = None, mmap: int | None = None):
+    """Общие настройки соединения: кэш, память под временные таблицы, mmap и потоки сортировки."""
+    con.execute(f"PRAGMA cache_size=-{(cache_mb or page_cache_mb()) * 1024}")
+    con.execute("PRAGMA temp_store=MEMORY")
+    for pragma in (f"PRAGMA mmap_size={(mmap if mmap is not None else mmap_mb()) * 1048576}",
+                   "PRAGMA threads=4"):     # вспомогательные потоки для сортировки и индексов
+        try:
+            con.execute(pragma)
+        except sqlite3.Error:               # старые сборки SQLite могут не знать этих прагм
+            pass
+    return con
+
+
 def case_db(case_id: str, write=False):
     p = case_path(case_id)
     if not write and not os.path.exists(p):
         raise FileNotFoundError(case_id)
     con = _connect(p)
     con.execute("PRAGMA journal_mode=WAL")
-    con.execute("PRAGMA cache_size=-65536")
-    con.execute("PRAGMA temp_store=MEMORY")
-    con.execute("PRAGMA mmap_size=268435456")
+    tune(con)
     if write:
         con.executescript(CASE_SCHEMA)
     return con

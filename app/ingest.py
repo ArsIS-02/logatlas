@@ -28,7 +28,7 @@ from .timeutil import ms_to_str
 
 log = logging.getLogger("logatlas.ingest")
 
-BATCH = 5000
+BATCH = int(os.environ.get("LOGATLAS_BATCH", "20000"))
 MAX_DEPTH = 4
 SKIP_NAMES = re.compile(r"(^|/)(\._[^/]*|\.DS_Store|__MACOSX/.*|Thumbs\.db)$")
 ROTATE_SUFFIX = re.compile(r"(\.\d+)?(\.(gz|bz2|xz|zst|tgz))?$")
@@ -255,7 +255,7 @@ def worker():
 # источника — без полных перезаписей таблицы.
 # ---------------------------------------------------------------------------
 SPILL_MAX = 64 << 20        # обычные файлы из tar до этого размера уходят воркеру целиком
-CHUNK = 48 << 20            # размер куска большого построчного журнала
+CHUNK = int(os.environ.get("LOGATLAS_CHUNK_MB", "24")) << 20   # размер куска большого построчного журнала
 PART_COLS = ("fidx",) + db.EVENT_COLS
 PART_SCHEMA = f"CREATE TABLE IF NOT EXISTS events({', '.join(PART_COLS)})"
 PART_INSERT = f"INSERT INTO events({','.join(PART_COLS)}) VALUES ({','.join('?' * len(PART_COLS))})"
@@ -265,11 +265,20 @@ _COUNTER = None             # общий счётчик разобранных �
 
 
 def n_workers() -> int:
+    """Сколько процессов разбирают журналы параллельно.
+
+    Берём все ядра машины; на слабых машинах (1–2 ядра) запускаем до четырёх процессов —
+    разбор упирается и в чтение файлов, поэтому лишний процесс не мешает. Число можно
+    задать явно: LOGATLAS_WORKERS=n.
+    """
     try:
         n = int(os.environ.get("LOGATLAS_WORKERS", "0"))
     except ValueError:
         n = 0
-    return max(1, min(n or (os.cpu_count() or 1), 16))
+    if n > 0:
+        return max(1, min(n, 64))
+    cores = os.cpu_count() or 1
+    return max(1, min(max(cores, min(4, cores * 2)), 32))
 
 
 def _init_worker(counter):
@@ -291,6 +300,7 @@ def _open_part(path):
     con = sqlite3.connect(path)
     con.execute("PRAGMA synchronous=OFF")
     con.execute("PRAGMA journal_mode=OFF")
+    db.tune(con, cache_mb=db.worker_cache_mb(), mmap=256)
     con.execute(PART_SCHEMA)
     return con
 
@@ -812,6 +822,7 @@ def run_ingest(case_id, paths, tz_default, tz_mode, since=None, until=None):
                                     "часовой пояс, индексы и правила обнаружения")
         con = db.case_db(case_id, write=True)
         con.execute("PRAGMA synchronous=OFF")
+        db.tune(con)
         analytics.drop_overview(con)        # сводка пересчитается в конце разбора
         shift = tz * 60000
         cols = ", ".join(db.EVENT_COLS)

@@ -26,6 +26,50 @@ export function stepsSummary(c) {
   return `${dateTime(start)} · ${state} · ${dur} · шагов: ${log.length}`;
 }
 
+/** Длительность человеческим языком: 12 с, 3 мин 05 с, 1 ч 20 мин */
+function dur(sec) {
+  sec = Math.max(0, Math.round(sec || 0));
+  if (sec < 60) return `${sec} с`;
+  const m = Math.floor(sec / 60);
+  if (m < 60) return `${m} мин ${two(sec % 60)} с`;
+  return `${Math.floor(m / 60)} ч ${two(m % 60)} мин`;
+}
+
+/** Когда начался сбор или разбор (мс): время создания дела, иначе — первый шаг журнала */
+function startedAt(c) {
+  const t = c.created || (c.log && c.log.length ? c.log[0].t : 0);
+  return t ? t * 1000 : 0;
+}
+
+/** Строка «идёт 3 мин · осталось ≈ 7 мин · 12 345 соб/с» — пересчитывается каждую секунду */
+function liveText(c) {
+  const t0 = startedAt(c);
+  if (!t0) return '';
+  const el = Math.max(0, (Date.now() - t0) / 1000);
+  const p = Math.max(0.02, Math.min(1, c.progress || 0));
+  const parts = [`идёт ${dur(el)}`];
+  if (p > 0.05 && p < 0.995 && el > 3) parts.push(`осталось ≈ ${dur((el * (1 - p)) / p)}`);
+  const ev = c.events || 0;
+  if (ev > 50 && el > 2) parts.push(`${fmtN(Math.round(ev / el))} соб/с`);
+  return parts.join(' · ');
+}
+
+let liveTimer = null;
+let liveCase = null;
+
+function stopLive() {
+  if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
+}
+
+function startLive() {
+  stopLive();
+  liveTimer = setInterval(() => {
+    const el = document.querySelector('.progress-card[data-live] .timer');
+    if (!el || !liveCase) { stopLive(); return; }
+    el.textContent = liveText(liveCase);
+  }, 1000);
+}
+
 function stepsPanel(c, open = true) {
   return h`<details class="steps-box" ${open ? raw('open') : ''}>
     <summary>Ход сбора <span class="muted">${stepsSummary(c)}</span></summary>
@@ -39,6 +83,7 @@ function scrollDown(view) {
 
 export function renderProgress(view, c) {
   if (c.status === 'error' && c.stage === 'Сбор не удался') {
+    stopLive();
     mount(view, h`<div class="progress-card">
       <div class="note err" style="text-align:left">Сбор не удался: ${c.message || 'неизвестная ошибка'}</div>
       ${stepsPanel(c)}
@@ -48,6 +93,7 @@ export function renderProgress(view, c) {
     return;
   }
   if (c.status === 'error') {
+    stopLive();
     mount(view, h`<div class="progress-card">
       <div class="note err" style="text-align:left">Обработка не удалась: ${c.message || 'неизвестная ошибка'}</div>
       ${stepsPanel(c)}
@@ -57,8 +103,11 @@ export function renderProgress(view, c) {
     return;
   }
   const p = Math.max(0.02, c.progress || 0);
+  liveCase = c;
   const existing = view.querySelector('.progress-card[data-live]');
   if (existing) {
+    const timer = existing.querySelector('.timer');
+    if (timer) timer.textContent = liveText(c);
     const fg = existing.querySelector('.ring-fg');
     const circ = 2 * Math.PI * 60;
     fg.setAttribute('stroke-dashoffset', String(circ * (1 - p)));
@@ -82,12 +131,14 @@ export function renderProgress(view, c) {
     ${raw(ring(p))}
     <h2>${title(c)}</h2>
     <div class="stage">${c.stage || ''}</div>
+    <div class="timer">${liveText(c)}</div>
     <div class="count">${c.events ? `${fmtN(c.events)} событий` : ''}</div>
     ${stepsPanel(c)}
     <p class="muted" style="font-size:13px;margin-top:18px">Страницу можно закрыть — сбор и обработка продолжатся на сервере.</p>
   </div>`);
   const box = view.querySelector('.steps-box');
   if (box) box.dataset.n = (c.log || []).length;
+  startLive();
   scrollDown(view);
 }
 

@@ -96,6 +96,7 @@ class TextParser(Parser):
     name = "text"
     label = "текстовый журнал"
     platform = "any"
+    splittable = True       # построчный формат: режется на части и разбирается параллельно
 
     @classmethod
     def sniff(cls, base, head):
@@ -207,6 +208,7 @@ class JsonLinesParser(Parser):
     name = "jsonl"
     label = "JSON-журнал"
     platform = "any"
+    splittable = True       # по строке на запись: большой файл режется и разбирается параллельно
 
     @classmethod
     def sniff(cls, base, head):

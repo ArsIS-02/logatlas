@@ -22,6 +22,7 @@ class SyslogParser(Parser):
     name = "syslog"
     label = "syslog"
     platform = "any"
+    splittable = True       # построчный формат: большой файл режется на части и разбирается параллельно
 
     @classmethod
     def sniff(cls, base, head):
