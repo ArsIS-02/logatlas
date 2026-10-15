@@ -95,6 +95,37 @@ mkdir -p data/inbox            # до первого запуска, чтобы 
 docker compose pull && docker compose up -d
 ```
 
+### Podman вместо Docker
+
+LogAtlas работает и в Podman: образ тот же, команды почти те же — вместо `docker` пишите `podman`. Разница лишь в том, что Podman обычно запускается от вашего пользователя без демона, поэтому `--user` задавать не нужно, а для «rootless»-томов с SELinux нужна метка `:Z`.
+
+Запуск готового образа:
+
+```bash
+mkdir -p logatlas/data/inbox && cd logatlas
+podman run -d --name logatlas --restart unless-stopped \
+  -p 8484:8484 -v "$PWD/data:/data:Z" \
+  ghcr.io/arsis-02/logatlas:latest
+```
+
+Обновление — скачать новый образ и пересоздать контейнер (данные в `./data` сохраняются):
+
+```bash
+podman pull ghcr.io/arsis-02/logatlas:latest
+podman stop logatlas && podman rm logatlas
+podman run -d --name logatlas --restart unless-stopped \
+  -p 8484:8484 -v "$PWD/data:/data:Z" \
+  ghcr.io/arsis-02/logatlas:latest
+```
+
+Через Compose — Podman умеет `docker-compose.yml` напрямую:
+
+```bash
+podman compose pull && podman compose up -d          # podman-compose или podman compose
+```
+
+Сборка из исходников: `podman compose up -d --build`. Журнал: `podman logs -f logatlas`; остановить: `podman compose down` (или `podman stop logatlas`).
+
 ### Windows без Docker
 
 К каждому [релизу](https://github.com/ArsIS-02/logatlas/releases) приложено оконное приложение для Windows 10 (1809 и новее) и Windows 11 — для процессоров Intel/AMD (`x64`) и ARM (`arm64`, например Snapdragon). Python встроен, ставить ничего не нужно:

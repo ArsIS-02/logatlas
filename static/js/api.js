@@ -1,4 +1,6 @@
 // Обращения к серверу
+import { getLang } from './i18n.js';
+
 async function req(method, path, body, params) {
   const url = new URL(path, window.location.origin);
   if (params) {
@@ -6,7 +8,7 @@ async function req(method, path, body, params) {
       if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, v);
     });
   }
-  const opts = { method, headers: {} };
+  const opts = { method, headers: { 'X-LogAtlas-Lang': getLang() } };
   if (body instanceof FormData) opts.body = body;
   else if (body !== undefined) {
     opts.body = JSON.stringify(body);
@@ -30,6 +32,7 @@ export const api = {
     return new Promise((resolve, reject) => {
       const x = new XMLHttpRequest();
       x.open('POST', '/api/cases');
+      x.setRequestHeader('X-LogAtlas-Lang', getLang());
       x.upload.onprogress = (e) => { if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total); };
       x.onload = () => {
         let d = null;

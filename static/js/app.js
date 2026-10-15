@@ -1,6 +1,7 @@
 // LogAtlas — маршрутизация, шапка, лента времени, боковая панель
 import { api } from './api.js';
 import { ribbon } from './charts.js';
+import { getLang, setLang, t, translateDOM } from './i18n.js';
 import {
   $, $$, CAT_KEYS, PLATFORMS, RT, fmtN, fmtSpan, fmtTime, h, mount, platIcon, platName, plural, raw, toast,
 } from './util.js';
@@ -109,16 +110,16 @@ function renderSide() {
   const activePlat = kind === 'home' ? S.route.platform : kind === 'case' ? (S.case?.platform || 'all') : null;
   mount($('#platforms'), h`${Object.entries(PLATFORMS).map(([k, p]) => h`
     <a class="plat ${activePlat === k ? 'on' : ''}" href="#/p/${k}">${raw(platIcon(k))}<span>${p.name}</span><span class="cnt">${counts[k] || ''}</span></a>`)}
-    <a class="plat plat-hosts ${kind === 'hosts' || kind === 'collect' ? 'on' : ''}" href="#/hosts">${raw(HOSTS_ICON)}<span>Хосты и сбор</span></a>
-    <a class="plat ${kind === 'rules' ? 'on' : ''}" href="#/rules">${RULES_ICON}<span>Правила Sigma</span></a>
-    <a class="plat ${kind === 'coverage' ? 'on' : ''}" href="#/coverage">${COVERAGE_ICON}<span>Покрытие</span></a>`);
+    <a class="plat plat-hosts ${kind === 'hosts' || kind === 'collect' ? 'on' : ''}" href="#/hosts">${raw(HOSTS_ICON)}<span>${t('Хосты и сбор')}</span></a>
+    <a class="plat ${kind === 'rules' ? 'on' : ''}" href="#/rules">${RULES_ICON}<span>${t('Правила Sigma')}</span></a>
+    <a class="plat ${kind === 'coverage' ? 'on' : ''}" href="#/coverage">${COVERAGE_ICON}<span>${t('Покрытие')}</span></a>`);
   const listPlat = activePlat || 'all';
   const list = S.cases.filter((c) => listPlat === 'all' || c.platform === listPlat || ['mixed', 'other', null].includes(c.platform));
   mount($('#side-cases'), h`
-    <div class="side-h"><span>Сборы</span><a href="#/p/${listPlat}" title="Загрузить журналы">+ Загрузить</a></div>
+    <div class="side-h"><span>${t('Сборы')}</span><a href="#/p/${listPlat}" title="${t('Загрузить журналы')}">+ ${t('Загрузить')}</a></div>
     ${list.length ? list.map((c) => h`<div class="side-case"><a class="case-link ${S.route.id === c.id ? 'on' : ''}" href="#/c/${c.id}/overview" title="${c.name}">
-      ${c.name}<small>${c.host || platName(c.platform)}${c.status !== 'ready' ? ` — ${statusName(c.status)}` : ''}</small></a><button class="case-del" type="button" data-id="${c.id}" title="Удалить сбор" aria-label="${`Удалить сбор «${c.name}»`}">${raw(TRASH)}<span></span></button></div>`)
-    : h`<div class="muted" style="padding:6px 10px;font-size:12.5px">Пока пусто</div>`}`);
+      ${c.name}<small>${c.host || platName(c.platform)}${c.status !== 'ready' ? ` — ${statusName(c.status)}` : ''}</small></a><button class="case-del" type="button" data-id="${c.id}" title="${t('Удалить сбор')}" aria-label="${`${t('Удалить сбор')} «${c.name}»`}">${raw(TRASH)}<span></span></button></div>`)
+    : h`<div class="muted" style="padding:6px 10px;font-size:12.5px">${t('Пока пусто')}</div>`}`);
 }
 
 const HOSTS_ICON = '<svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3.5" width="14" height="5" rx="1.3"/><rect x="3" y="11.5" width="14" height="5" rx="1.3"/><path d="M6 6h.01M6 14h.01" stroke-width="2.2" stroke-linecap="round"/></svg>';
@@ -128,7 +129,7 @@ function disarm(b) {
   clearTimeout(b._t);
   b.dataset.armed = '';
   b.classList.remove('armed');
-  b.title = 'Удалить сбор';
+  b.title = t('Удалить сбор');
   b.querySelector('span').textContent = '';
 }
 
@@ -142,8 +143,8 @@ async function onSideClick(e) {
     $$('#side-cases .case-del.armed').forEach(disarm);
     b.dataset.armed = '1';
     b.classList.add('armed');
-    b.title = 'Нажмите ещё раз: сбор и его файлы удалятся безвозвратно';
-    b.querySelector('span').textContent = 'Удалить?';
+    b.title = t('Нажмите ещё раз: сбор и его файлы удалятся безвозвратно');
+    b.querySelector('span').textContent = t('Удалить?');
     b._t = setTimeout(() => disarm(b), 4000);
     return;
   }
@@ -155,7 +156,7 @@ async function onSideClick(e) {
     const r = await api.del(`/api/cases/${id}`);
     if (wasOpen) { S.case = null; S.full = null; }
     await loadCases();
-    toast(r && r.busy ? 'Сбор удалён, разбор остановлен' : 'Сбор удалён');
+    toast(r && r.busy ? t('Сбор удалён, разбор остановлен') : t('Сбор удалён'));
     if (wasOpen) window.location.hash = `#/p/${S.route.platform || 'all'}`;
     else if (S.route.kind === 'home') route();
   } catch (err) {
@@ -166,7 +167,7 @@ async function onSideClick(e) {
 }
 
 export function statusName(s) {
-  return { ready: 'готово', processing: 'обработка', queued: 'в очереди', error: 'ошибка', collecting: 'идёт сбор' }[s] || s;
+  return t({ ready: 'готово', processing: 'обработка', queued: 'в очереди', error: 'ошибка', collecting: 'идёт сбор' }[s] || s);
 }
 
 // ---------------------------------------------------------------------------
@@ -184,26 +185,26 @@ function renderTop() {
   const top = $('#top');
   const r = S.route;
   if (r.kind === 'rules') {
-    mount(top, h`<div class="top-row"><div class="top-title"><h1>Правила Sigma</h1>
-      <div class="chips"><span class="chip">импорт правил SigmaHQ и своих</span></div></div></div>`);
+    mount(top, h`<div class="top-row"><div class="top-title"><h1>${t('Правила Sigma')}</h1>
+      <div class="chips"><span class="chip">${t('импорт правил SigmaHQ и своих')}</span></div></div></div>`);
     S.ribbonApi = null;
     return;
   }
   if (r.kind === 'coverage') {
-    mount(top, h`<div class="top-row"><div class="top-title"><h1>Покрытие</h1>
-      <div class="chips"><span class="chip">что размечено и что закрыто правилами</span></div></div></div>`);
+    mount(top, h`<div class="top-row"><div class="top-title"><h1>${t('Покрытие')}</h1>
+      <div class="chips"><span class="chip">${t('что размечено и что закрыто правилами')}</span></div></div></div>`);
     S.ribbonApi = null;
     return;
   }
   if (r.kind === 'hosts' || r.kind === 'collect') {
-    mount(top, h`<div class="top-row"><div class="top-title"><h1>${r.kind === 'hosts' ? 'Хосты и сбор журналов' : 'Новый сбор с хоста'}</h1>
-      <div class="chips"><span class="chip">по SSH, ключом панели</span></div></div></div>`);
+    mount(top, h`<div class="top-row"><div class="top-title"><h1>${r.kind === 'hosts' ? t('Хосты и сбор журналов') : t('Новый сбор с хоста')}</h1>
+      <div class="chips"><span class="chip">${t('по SSH, ключом панели')}</span></div></div></div>`);
     S.ribbonApi = null;
     return;
   }
   if (r.kind !== 'case' || !S.case) {
-    mount(top, h`<div class="top-row"><div class="top-title"><h1>${r.platform && r.platform !== 'all' ? `Журналы ${PLATFORMS[r.platform]?.name || ''}` : 'Анализ журналов'}</h1>
-      <div class="chips"><span class="chip">${S.cases.length} ${plural(S.cases.length, 'сбор', 'сбора', 'сборов')}</span></div></div></div>`);
+    mount(top, h`<div class="top-row"><div class="top-title"><h1>${r.platform && r.platform !== 'all' ? `${t('Журналы ')}${PLATFORMS[r.platform]?.name || ''}` : t('Анализ журналов')}</h1>
+      <div class="chips"><span class="chip">${S.cases.length} ${t(plural(S.cases.length, 'сбор', 'сбора', 'сборов'))}</span></div></div></div>`);
     S.ribbonApi = null;
     return;
   }
@@ -217,22 +218,22 @@ function renderTop() {
         <h1 title="${c.name}">${c.name}</h1>
         <div class="chips">
           <span class="chip">${raw(platIcon(c.platform))}${platName(c.platform)}</span>
-          ${c.host ? h`<span class="chip">Хост ${c.host}</span>` : ''}
-          <span class="chip">Время хоста ${c.tz_label}</span>
-          ${ready ? h`<span class="chip num">${fmtN(c.events)} событий</span>` : ''}
+          ${c.host ? h`<span class="chip">${t('Хост ')}${c.host}</span>` : ''}
+          <span class="chip">${t('Время хоста ')}${c.tz_label}</span>
+          ${ready ? h`<span class="chip num">${fmtN(c.events)} ${t('событий')}</span>` : ''}
           ${ready && c.t_min ? h`<span class="chip">${fmtTime(c.t_min, 'date')} — ${fmtTime(c.t_max, 'date')}</span>` : ''}
         </div>
       </div>
       ${ready ? h`<form class="qbox" id="qform" role="search">
         <svg class="qicon" viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="m13 13 4 4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
-        <input id="q" name="q" autocomplete="off" spellcheck="false" placeholder="Поиск: sudo, process:sshd, /regex/…" value="${r.q}" aria-label="Поиск по журналам">
-        <button class="btn ghost small qhelp" type="button" id="qhelp" aria-expanded="false">Синтаксис</button>
+        <input id="q" name="q" autocomplete="off" spellcheck="false" placeholder="${t('Поиск: sudo, process:sshd, /regex/…')}" value="${r.q}" aria-label="${t('Поиск по журналам')}">
+        <button class="btn ghost small qhelp" type="button" id="qhelp" aria-expanded="false">${t('Синтаксис')}</button>
         <div class="qpop hidden" id="qpop"></div>
       </form>` : ''}
     </div>
-    ${ready && f ? h`<div class="ribbon" id="ribbon" aria-label="Лента времени: выделите период"></div>
+    ${ready && f ? h`<div class="ribbon" id="ribbon" aria-label="${t('Лента времени: выделите период')}"></div>
     <div class="ribbon-info" id="ribbon-info"></div>` : ''}
-    ${ready ? h`<nav class="tabs" role="tablist">${TABS.map(([k, name]) => h`<a class="tab ${r.tab === k ? 'on' : ''}" role="tab" aria-selected="${r.tab === k}" href="${caseHref(c.id, k, { range: r.range, q: k === 'search' ? r.q : '' })}">${name}${k === 'findings' && nf ? h`<span class="badge hot">${fmtN(nf)}</span>` : ''}</a>`)}</nav>` : ''}`);
+    ${ready ? h`<nav class="tabs" role="tablist">${TABS.map(([k, name]) => h`<a class="tab ${r.tab === k ? 'on' : ''}" role="tab" aria-selected="${r.tab === k}" href="${caseHref(c.id, k, { range: r.range, q: k === 'search' ? r.q : '' })}">${t(name)}${k === 'findings' && nf ? h`<span class="badge hot">${fmtN(nf)}</span>` : ''}</a>`)}</nav>` : ''}`);
   if (ready && f) {
     const classified = f.hist_total.map((_, i) => CAT_KEYS.reduce((a, k) => a + (f.hist_cat[k]?.[i] || 0), 0));
     S.ribbonApi = ribbon($('#ribbon'), { start: f.hist_start, bucket: f.bucket, total: f.hist_total, classified }, r.range,
@@ -246,10 +247,10 @@ function renderRibbonInfo() {
   const el = $('#ribbon-info');
   if (!el) return;
   const r = S.route.range;
-  mount(el, r ? h`<span>Период</span><span class="rng">${fmtTime(r[0])} — ${fmtTime(r[1])}</span><span class="muted">${fmtSpan(r[1] - r[0])}</span>
-      <button class="btn ghost small" id="rng-reset" type="button">Сбросить период</button>`
-    : h`<span class="muted">Весь период сбора. Выделите участок на ленте, чтобы сузить все вкладки.</span>
-      <span class="legend-inline"><i class="li-a"></i>все события <i class="li-c"></i>классифицированные</span>`);
+  mount(el, r ? h`<span>${t('Период')}</span><span class="rng">${fmtTime(r[0])} — ${fmtTime(r[1])}</span><span class="muted">${fmtSpan(r[1] - r[0])}</span>
+      <button class="btn ghost small" id="rng-reset" type="button">${t('Сбросить период')}</button>`
+    : h`<span class="muted">${t('Весь период сбора. Выделите участок на ленте, чтобы сузить все вкладки.')}</span>
+      <span class="legend-inline"><i class="li-a"></i>${t('все события ')}<i class="li-c"></i>${t('классифицированные')}</span>`);
   const b = $('#rng-reset');
   if (b) b.addEventListener('click', () => ctx().setRange(null));
 }
@@ -277,8 +278,8 @@ function bindSearch() {
     ctx().search(q);
   });
   const pop = $('#qpop');
-  mount(pop, h`<table>${SYNTAX.map(([a, b]) => h`<tr><td><code data-ex="${a}">${a}</code></td><td>${b}</td></tr>`)}</table>
-    <p class="muted" style="margin:10px 0 0;font-size:12px">Условия объединяются через «И». Регистр латиницы не важен.</p>`);
+  mount(pop, h`<table>${SYNTAX.map(([a, b]) => h`<tr><td><code data-ex="${a}">${a}</code></td><td>${t(b)}</td></tr>`)}</table>
+    <p class="muted" style="margin:10px 0 0;font-size:12px">${t('Условия объединяются через «И». Регистр латиницы не важен.')}</p>`);
   $('#qhelp').addEventListener('click', () => {
     pop.classList.toggle('hidden');
     $('#qhelp').setAttribute('aria-expanded', String(!pop.classList.contains('hidden')));
@@ -344,7 +345,7 @@ async function route() {
     setTimeout(() => {
       const t = view.querySelector('.loading-t');
       if (t && seq === S.renderSeq) {
-        t.textContent = 'Готовлю сводку по сбору. Для сбора из миллионов событий при первом открытии это может занять '
+        t.textContent = t('Готовлю сводку по сбору. Для сбора из миллионов событий при первом открытии это может занять ')
           + 'несколько минут — потом он будет открываться сразу. Страницу можно не закрывать.';
       }
     }, 3000);
@@ -352,7 +353,7 @@ async function route() {
   try {
     await loadCase(r.id, caseChanged);
   } catch (e) {
-    mount(view, h`<div class="note err">Не удалось открыть сбор: ${e.message}</div><a href="#/">К списку сборов</a>`);
+    mount(view, h`<div class="note err">${t('Не удалось открыть сбор: ')}${e.message}</div><a href="#/">${t('К списку сборов')}</a>`);
     return;
   }
   if (seq !== S.renderSeq) return;
@@ -369,7 +370,7 @@ async function route() {
           await loadCases();
           await loadCase(c.id, true);
           route();
-          if (nc.status === 'ready') toast('Журналы обработаны');
+          if (nc.status === 'ready') toast(t('Журналы обработаны'));
           return;
         }
         S.case = nc;
@@ -399,7 +400,7 @@ async function route() {
     await tab[2](view, ctx());
   } catch (e) {
     console.error(e);
-    mount(view, h`<div class="note err">Ошибка: ${e.message}</div>`);
+    mount(view, h`<div class="note err">${t('Ошибка: ')}${e.message}</div>`);
   }
 }
 
@@ -417,7 +418,22 @@ function theme() {
 async function boot() {
   $('#theme-btn').addEventListener('click', theme);
   $('#side-cases').addEventListener('click', onSideClick);
+  // Переключение языка интерфейса; сервер берёт язык из заголовка X-LogAtlas-Lang (api.js).
+  const langLabel = $('#lang-label');
+  const renderLang = () => { langLabel.textContent = getLang() === 'ru' ? 'EN' : 'RU'; };
+  renderLang();
+  $('#lang-btn').addEventListener('click', () => {
+    setLang(getLang() === 'ru' ? 'en' : 'ru');
+    renderLang();
+    route();
+  });
+  window.__laRerender = route;
   window.addEventListener('la:cases-changed', () => loadCases());
+  // Переводим вставленные в DOM строки по словарю (покрывает и динамические блоки: toast, drawer, вкладки).
+  new MutationObserver((muts) => {
+    muts.forEach((m) => m.addedNodes.forEach((n) => { if (n.nodeType === 1) translateDOM(n); }));
+  }).observe(document.body, { childList: true, subtree: true });
+  translateDOM(document.body);
   // команды из меню окна LogAtlas (LogAtlas.exe, LogAtlas.app)
   window.laCommand = (cmd) => {
     if (cmd !== 'collect-here') return;

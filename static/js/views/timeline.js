@@ -2,6 +2,7 @@
 import { api } from '../api.js';
 import { swimlane } from '../charts.js';
 import { $, $$, CATS, CAT_KEYS, catColor, catTag, fmtBucket, fmtN, fmtSpan, fmtTime, h, mount } from '../util.js';
+import { t } from '../i18n.js';
 
 export async function renderTimeline(view, ctx) {
   const c = ctx.case;
@@ -11,19 +12,19 @@ export async function renderTimeline(view, ctx) {
   mount(view, h`
     <section class="panel">
       <div class="panel-h">
-        <h2>Хронология хоста</h2>
+        <h2>${t('Хронология хоста')}</h2>
         <div class="tools">
           <span class="sub" id="tl-span"></span>
-          <button class="btn small" type="button" id="tl-apply" disabled>Сделать периодом сбора</button>
-          <button class="btn ghost small" type="button" id="tl-reset" disabled>Исходный масштаб</button>
+          <button class="btn small" type="button" id="tl-apply" disabled>${t('Сделать периодом сбора')}</button>
+          <button class="btn ghost small" type="button" id="tl-reset" disabled>${t('Исходный масштаб')}</button>
         </div>
       </div>
       <div class="legend" id="tl-cats" style="margin:0 0 12px">${CAT_KEYS.map((k) => h`<button type="button" class="chip" data-cat="${k}"><span class="dot" style="background:${catColor(k)}"></span>${CATS[k]}</button>`)}</div>
       <div class="chart" id="tl"></div>
-      <p class="muted" style="font-size:12px;margin:10px 0 0">Перетаскивайте, чтобы сдвинуть; Ctrl, ⌘ или Shift с колесом — масштаб, двойной щелчок — приблизить. Точки — отдельные события, полосы — плотность частых событий.</p>
+      <p class="muted" style="font-size:12px;margin:10px 0 0">${t('Перетаскивайте, чтобы сдвинуть; Ctrl, ⌘ или Shift с колесом — масштаб, двойной щелчок — приблизить. Точки — отдельные события, полосы — плотность частых событий.')}</p>
     </section>
     <section class="panel" style="margin-top:18px">
-      <div class="panel-h"><h2>События в окне</h2><span class="sub" id="tl-count"></span></div>
+      <div class="panel-h"><h2>${t('События в окне')}</h2><span class="sub" id="tl-count"></span></div>
       <div id="tl-list" class="tl-list"></div>
     </section>`);
 
@@ -44,12 +45,12 @@ export async function renderTimeline(view, ctx) {
     });
     const pts = (d.points || []).slice().reverse();
     $('#tl-count').textContent = d.mode === 'buckets'
-      ? `${fmtN(d.count)} событий; полосы по ${fmtBucket(d.bucket)}, списком — редкие действия`
-      : `${fmtN(d.count)} событий`;
-    mount($('#tl-list'), pts.length ? h`<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Время</th><th>Категория</th><th>Действие</th><th>Объект</th><th>Процесс</th></tr></thead><tbody>
+      ? t('{n} событий; полосы по {bucket}, списком — редкие действия', { n: fmtN(d.count), bucket: fmtBucket(d.bucket) })
+      : t('{n} событий', { n: fmtN(d.count) });
+    mount($('#tl-list'), pts.length ? h`<div class="tbl-wrap"><table class="tbl"><thead><tr><th>${t('Время')}</th><th>${t('Категория')}</th><th>${t('Действие')}</th><th>${t('Объект')}</th><th>${t('Процесс')}</th></tr></thead><tbody>
       ${pts.slice(0, 2000).map((p) => h`<tr class="click" data-id="${p[0]}"><td class="t">${fmtTime(p[1])}</td><td>${catTag(p[2])}</td><td class="act">${p[3] || ''}</td><td class="subj">${p[4] || ''}</td><td class="ink2">${p[5] || ''}</td></tr>`)}
-      </tbody></table></div>${pts.length > 2000 ? h`<p class="muted" style="font-size:12px">Показаны последние 2000. Приблизьте участок или откройте поиск.</p>` : ''}`
-      : h`<div class="empty">В окне нет классифицированных событий</div>`);
+      </tbody></table></div>${pts.length > 2000 ? h`<p class="muted" style="font-size:12px">${t('Показаны последние 2000. Приблизьте участок или откройте поиск.')}</p>` : ''}`
+      : h`<div class="empty">${t('В окне нет классифицированных событий')}</div>`);
     $$('#tl-list tr[data-id]').forEach((tr) => tr.addEventListener('click', () => ctx.openEvent(+tr.dataset.id)));
   }
   $$('#tl-cats [data-cat]').forEach((b) => b.addEventListener('click', () => {
