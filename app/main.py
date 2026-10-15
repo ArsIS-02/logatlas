@@ -728,7 +728,20 @@ def mitre_update_status(req):
 
 
 def _is_local(req: Request) -> bool:
-    return (req.client.host if req.client else "") in ("127.0.0.1", "::1")
+    """Запрос пришёл с этого же компьютера. Учитываем IPv4, IPv6 и адрес вида ::ffff:127.0.0.1,
+    который отдаёт uvicorn, когда клиент подключается по IPv4 к двойному стеку."""
+    host = (req.client.host if req.client else "") or ""
+    if host in ("127.0.0.1", "::1", "localhost"):
+        return True
+    try:
+        import ipaddress
+        ip = ipaddress.ip_address(host)
+        if ip.is_loopback:
+            return True
+        mapped = getattr(ip, "ipv4_mapped", None)
+        return bool(mapped and mapped.is_loopback)
+    except ValueError:
+        return host.lower() == "localhost"
 
 
 def windows_local_logs(req: Request):
