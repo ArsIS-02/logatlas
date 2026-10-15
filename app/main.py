@@ -723,20 +723,109 @@ def _is_local(req: Request) -> bool:
     return (req.client.host if req.client else "") in ("127.0.0.1", "::1")
 
 
+def windows_local_logs():
+    """Вернуть список доступных журналов Windows с метаданными.
+    Запускает wevtutil enum-logs и enum-channel-list, возвращает JSON."""
+    if not winlocal.ENABLED:
+        return _err("Доступно только в приложении LogAtlas для Windows", 404)
+
+    # Дефолтные журналы с описаниями (как в GUI)
+    log_defs = {
+        'Security':              {'label': 'Security',      'desc': 'Входы в систему, учётные записи, аудит'},
+        'System':                {'label': 'System',        'desc': 'Службы, драйверы, перезагрузки'},
+        'Application':           {'label': 'Application',   'desc': 'Ошибки и сообщения программ'},
+        'Microsoft-Windows-Sysmon/Operational':      {'label': 'Sysmon',         'desc': 'Процессы, сеть, файлы'},
+        'Microsoft-Windows-PowerShell/Operational':  {'label': 'PowerShell',     'desc': 'Выполненные скрипты'},
+        'Microsoft-Windows-Windows Defender/Operational': {'label': 'Defender',    'desc': 'Угрозы и настройки защиты'},
+        'Microsoft-Windows-TaskScheduler/Operational': {'label': 'Планировщик',  'desc': 'Задания и их запуск'},
+        'Microsoft-Windows-TerminalServices-LocalSessionManager/Operational': {'label': 'RDP: сеансы', 'desc': 'Входы и отключения'},
+        'Microsoft-Windows-TerminalServices-RemoteConnectionManager/Operational': {'label': 'RDP: подключения', 'desc': 'Попытки соединения'},
+    }
+
+    logs = []
+    try:
+        import subprocess
+        # Получаем список журналов через wevtutil
+        result = subprocess.run(
+            ['wevtutil.exe', 'enum-logs'],
+            capture_output=True, text=True, timeout=30,
+            creationflags=0x08000000  # CREATE_NO_WINDOW
+        )
+        if result.returncode == 0:
+            for line in result.stdout.splitlines():
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                # Формат: name: <имя>
+                if line.startswith('name:'):
+                    name = line[5:].strip()
+                    if name in log_defs:
+                        info = log_defs[name]
+                        # Получаем количество записей и размер
+                        try:
+                            info_result = subprocess.run(
+                                ['wevtutil.exe', 'gli', name],
+                                capture_output=True, text=True, timeout=10,
+                                creationflags=0x08000000
+                            )
+                            if info_result.returncode == 0:
+                                for il in info_result.stdout.splitlines():
+                                    if 'numberOfLogRecords:' in il:
+                                        try: info['records'] = int(il.split(':')[1].strip())
+                                        except: info['records'] = 0
+                                    elif 'fileSize:' in il:
+                                        try: info['size'] = int(il.split(':')[1].strip())
+                                        except: info['size'] = 0
+                        except Exception:  # noqa: BLE001
+                            pass
+                        info['exists'] = True
+                        logs.append(info)
+    except (OSError, subprocess.SubprocessError) as e:
+        log.warning("cannot enumerate Windows logs: %s", e)
+
+    # Добавляем журналы из channel-list (дополнительные)
+    try:
+        result = subprocess.run(
+            ['wevtutil.exe', 'enum-channels'],
+            capture_output=True, text=True, timeout=30,
+            creationflags=0x08000000
+        )
+        if result.returncode == 0:
+            for line in result.stdout.splitlines():
+                line = line.strip()
+                if line.startswith('name:'):
+                    name = line[5:].strip()
+                    if name not in log_defs and name not in [l.get('name') for l in logs]:
+                        logs.append({
+                            'name': name,
+                            'label': name.split('/')[-1],
+                            'desc': '',
+                            'exists': True,
+                            'records': None,
+                            'size': None,
+                        })
+    except Exception:  # noqa: BLE001
+        pass
+
+    return J(logs)
+
+
 async def local_collect(req: Request):
     if not winlocal.ENABLED and not maclocal.ENABLED:
         return _err("Доступно только в приложении LogAtlas для Windows и macOS", 404)
     if not _is_local(req):
         return _err("Сбор журналов этого компьютера запускается только с него самого", 403)
     try:
+        body = await req.json()
+    except ValueError:
+        body = {}
+    body = body or {}
+    try:
         if winlocal.ENABLED:
-            jid = await run_in_threadpool(winlocal.start, _base(req))
+            logs = body.get("logs", [])
+            since, until = _period(body.get("since"), body.get("until"))
+            jid = await run_in_threadpool(winlocal.start_headless, _base(req), logs, since, until)
         else:
-            try:
-                body = await req.json()
-            except ValueError:
-                body = {}
-            body = body or {}
             since, until = _period(body.get("since"), body.get("until"))
             jid = maclocal.start(body.get("days", 3),
                                  since // 1000 if since else None,
@@ -773,6 +862,7 @@ routes = [
     Route("/", index),
     Route("/healthz", health),
     Route("/api/status", status),
+    Route("/api/local/windows/logs", windows_local_logs, methods=["GET"]),
     Route("/favicon.ico", lambda r: _icon("icons/favicon.ico", "image/x-icon")),
     Route("/apple-touch-icon.png", lambda r: _icon("icons/apple-touch-icon.png", "image/png")),
     Route("/apple-touch-icon-precomposed.png", lambda r: _icon("icons/apple-touch-icon.png", "image/png")),

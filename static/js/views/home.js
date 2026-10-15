@@ -248,60 +248,145 @@ export async function renderHome(view, { platform, cases, meta, refresh }) {
     }
   }
 
-  // Журналы этого компьютера (LogAtlas для Windows: окно сборщика; для macOS: период и пароль администратора)
+  // Журналы этого компьютера (Windows: форма выбора журналов и периода; macOS: период и пароль)
   const lc = $('#local-collect');
   const box = $('#local-box');
-  // сбор сразу появляется в списке сборов: открываем его страницу — там ход сбора, и он не теряется
   const startLocal = async (body) => {
     lc.disabled = true;
+    box.innerHTML = '<div class="spinner"></div><span class="muted">Запуск сбора…</span>';
     let job;
     try {
       job = await api.post('/api/local/collect', body);
     } catch (e) {
       lc.disabled = false;
+      box.classList.add('hidden');
       toast(e.message);
       return;
     }
-    if (meta.local_collect !== 'macos') toast('Открыто окно сборщика: выберите журналы и период и нажмите «Собрать». Архив разберётся сам.');
+    if (meta.local_collect === 'windows') toast('Запрошены права администратора. Подтвердите в появившемся окне. Архив разберётся автоматически.');
+    if (meta.local_collect === 'macos') toast('macOS спросит пароль администратора — LogAtlas его не видит.');
     window.dispatchEvent(new Event('la:cases-changed'));
     if (job.case) window.location.hash = `#/c/${job.case}/overview`;
   };
   if (lc) {
-    lc.addEventListener('click', () => {
-      if (meta.local_collect !== 'macos') { startLocal({}); return; }
-      box.classList.toggle('hidden');
-      mount(box, h`<label class="lbl">Период<select class="field" id="local-days">
-          <option value="1">последние сутки</option><option value="3" selected>3 дня</option><option value="7">неделя</option>
-          <option value="14">2 недели</option><option value="30">30 дней</option>
-          <option value="custom">Свой период</option></select></label>
-        <label class="lbl hidden" id="lfrom-wrap">С<input class="field" type="datetime-local" id="lfrom"></label>
-        <label class="lbl hidden" id="lto-wrap">По<input class="field" type="datetime-local" id="lto"></label>
-        <button class="btn primary" type="button" id="local-go">Собрать и разобрать</button>
-        <span class="muted local-hint">Unified log без самых шумных подсистем, питание и установки. macOS спросит пароль администратора — LogAtlas его не видит.</span>`);
-      const lmode = $('#local-days');
-      const lfrom = $('#lfrom');
-      const lto = $('#lto');
-      const showLocalDates = (on) => ['#lfrom-wrap', '#lto-wrap'].forEach((s) => $(s).classList.toggle('hidden', !on));
-      lmode.addEventListener('change', () => {
-        if (lmode.value === 'custom') {
-          showLocalDates(true);
-          if (!lfrom.value || !lto.value) {
-            lto.value = toLocal(Date.now());
-            lfrom.value = toLocal(Date.now() - 3 * 86400e3);
+    lc.addEventListener('click', async () => {
+      box.classList.remove('hidden');
+      if (meta.local_collect === 'windows') {
+        // Windows: загружаем список журналов и показываем форму
+        mount(box, h`<div class="win-collect-form"><div class="loading"><span class="spinner"></span> Загрузка списка журналов…</div></div>`);
+        let windowsLogs = [];
+        try {
+          windowsLogs = await api.get('/api/local/windows/logs');
+        } catch (e) {
+          mount(box, h`<div class="win-collect-form"><div class="note err">Не удалось загрузить журналы: ${e.message}</div></div>`);
+          return;
+        }
+        const PRESET_HOURS = [24, 72, 168, 720];
+        const presets = ['24 часа', '3 дня', '7 дней', '30 дней', 'Всё время', 'Свой период'];
+        const formatSize = (bytes) => {
+          if (!bytes) return '—';
+          const units = ['Б', 'КБ', 'МБ', 'ГБ'];
+          let i = 0;
+          while (bytes >= 1024 && i < units.length - 1) { bytes /= 1024; i++; }
+          return `${bytes.toFixed(i > 0 ? 1 : 0)} ${units[i]}`;
+        };
+        mount(box, h`<div class="win-collect-form">
+          <h3>Журналы Windows</h3>
+          <div class="logs-list">${windowsLogs.map((log, i) => h`<label class="log-item">
+              <input type="checkbox" checked data-idx="${i}" data-name="${log.name}">
+              <div class="log-info">
+                <div class="log-name">${log.label || log.name}</div>
+                <div class="log-desc">${log.desc || ''}</div>
+              </div>
+              <div class="log-meta">${log.records != null ? fmtN(log.records) + ' соб.' : ''} ${log.size ? formatSize(log.size) : ''}</div>
+            </label>`).join('')}</div>
+          <div class="period-section">
+            <div class="period-presets">${presets.slice(0, -1).map((p, i) => h`<button type="button" class="btn small period-preset" data-hours="${PRESET_HOURS[i]}">${p}</button>`).join('')}
+              <button type="button" class="btn small period-preset" data-custom="1">Свой период</button>
+            </div>
+            <div class="date-range hidden">
+              <input class="field" type="datetime-local" id="w-from">
+              <span>—</span>
+              <input class="field" type="datetime-local" id="w-to">
+            </div>
+            <div class="collect-hint">Для чтения журнала Security нужны права администратора. Скрипт только читает журналы — в системе ничего не меняется.</div>
+            <button class="btn primary collect-btn" type="button">Собрать и разобрать</button>
+          </div>
+        </div>`);
+        const presetBtns = box.querySelectorAll('.period-preset');
+        const dateRange = box.querySelector('.date-range');
+        const wFrom = box.querySelector('#w-from');
+        const wTo = box.querySelector('#w-to');
+        const collectBtn = box.querySelector('.collect-btn');
+        let selectedHours = null;
+        presetBtns.forEach((btn) => {
+          btn.addEventListener('click', () => {
+            presetBtns.forEach((b) => b.classList.remove('active'));
+            if (btn.dataset.custom === '1') {
+              dateRange.classList.remove('hidden');
+              if (!wFrom.value || !wTo.value) {
+                wTo.value = toLocal(Date.now());
+                wFrom.value = toLocal(Date.now() - 24 * 3600e3);
+              }
+              selectedHours = null;
+            } else {
+              dateRange.classList.add('hidden');
+              btn.classList.add('active');
+              selectedHours = +btn.dataset.hours;
+              wFrom.value = toLocal(Date.now() - selectedHours * 3600e3);
+              wTo.value = toLocal(Date.now());
+            }
+          });
+        });
+        collectBtn.addEventListener('click', async () => {
+          const checked = box.querySelectorAll('.log-item input:checked');
+          if (!checked.length) { toast('Выберите хотя бы один журнал'); return; }
+          const logs = Array.from(checked).map(cb => cb.dataset.name);
+          const since = fromLocal(wFrom.value);
+          const until = fromLocal(wTo.value);
+          const body = { logs };
+          if (since && until && since < until) {
+            body.since = since;
+            body.until = until;
           }
-        } else showLocalDates(false);
-      });
-      $('#local-go').addEventListener('click', () => {
-        if (lmode.value === 'custom') {
-          const a = fromLocal(lfrom.value);
-          const b = fromLocal(lto.value);
-          if (!a || !b || a >= b) {
-            toast('Проверьте период: начало должно быть раньше конца');
-            return;
-          }
-          startLocal({ since: a, until: b });
-        } else startLocal({ days: +lmode.value });
-      });
+          startLocal(body);
+        });
+      } else {
+        // macOS
+        box.classList.toggle('hidden');
+        mount(box, h`<label class="lbl">Период<select class="field" id="local-days">
+            <option value="1">последние сутки</option><option value="3" selected>3 дня</option><option value="7">неделя</option>
+            <option value="14">2 недели</option><option value="30">30 дней</option>
+            <option value="custom">Свой период</option></select></label>
+          <label class="lbl hidden" id="lfrom-wrap">С<input class="field" type="datetime-local" id="lfrom"></label>
+          <label class="lbl hidden" id="lto-wrap">По<input class="field" type="datetime-local" id="lto"></label>
+          <button class="btn primary" type="button" id="local-go">Собрать и разобрать</button>
+          <span class="muted local-hint">Unified log без самых шумных подсистем, питание и установки. macOS спросит пароль администратора — LogAtlas его не видит.</span>`);
+        const lmode = $('#local-days');
+        const lfrom = $('#lfrom');
+        const lto = $('#lto');
+        const showLocalDates = (on) => ['#lfrom-wrap', '#lto-wrap'].forEach((s) => $(s).classList.toggle('hidden', !on));
+        lmode.addEventListener('change', () => {
+          if (lmode.value === 'custom') {
+            showLocalDates(true);
+            if (!lfrom.value || !lto.value) {
+              lto.value = toLocal(Date.now());
+              lfrom.value = toLocal(Date.now() - 3 * 86400e3);
+            }
+          } else showLocalDates(false);
+        });
+        $('#local-go').addEventListener('click', () => {
+          if (lmode.value === 'custom') {
+            const a = fromLocal(lfrom.value);
+            const b = fromLocal(lto.value);
+            if (!a || !b || a >= b) {
+              toast('Проверьте период: начало должно быть раньше конца');
+              return;
+            }
+            startLocal({ since: a, until: b });
+          } else startLocal({ days: +lmode.value });
+        });
+      }
     });
   }
 

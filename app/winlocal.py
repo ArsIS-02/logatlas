@@ -267,6 +267,135 @@ def start(url: str, on_done=None) -> str:
     return jid
 
 
+def start_headless(url: str, logs: list[str], since: int | None, until: int | None) -> str:
+    """Запустить headless-сбор журналов Windows без GUI.
+
+    Запускает collect-windows-headless.ps1 через ShellExecute runas (UAC).
+    logs — список имён журналов (если пустой, используются дефолтные).
+    since/until — границы периода в миллисекундах (или None для всего архива).
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    if not ENABLED:
+        raise RuntimeError("Сбор журналов этого компьютера доступен в приложении LogAtlas для Windows")
+    busy = active_job(JOBS, _lock)
+    if busy:
+        return busy["id"]
+
+    script = os.path.join(collect.SCRIPTS_DIR, "collect-windows-headless.ps1")
+    if not os.path.isfile(script):
+        raise RuntimeError("Не найден scripts\\collect-windows-headless.ps1 — переустановите LogAtlas")
+
+    jid = uuid.uuid4().hex[:8]
+    out_dir = os.path.join(LOCAL_DIR, jid)
+    os.makedirs(out_dir, exist_ok=True)
+
+    host = os.environ.get("COMPUTERNAME", "")
+    stage = "Подтвердите права администратора (окно UAC)…"
+    cid = create_case("windows", host, stage)
+
+    # Формируем список журналов
+    log_list = ",".join(logs) if logs else "*"
+
+    # Устанавливаем переменные окружения для сборщика
+    saved = {k: os.environ.get(k) for k in ("LA_OUT_DIR", "LA_URL", "LA_LOGS", "LA_SINCE", "LA_UNTIL", "LA_JOB_ID")}
+    os.environ["LA_OUT_DIR"] = out_dir
+    os.environ["LA_URL"] = url
+    os.environ["LA_LOGS"] = log_list
+    os.environ["LA_SINCE"] = str(since // 1000) if since else ""
+    os.environ["LA_UNTIL"] = str(until // 1000) if until else ""
+    os.environ["LA_JOB_ID"] = jid
+
+    try:
+        # Формируем команду для PowerShell
+        script_arg = f'-NoProfile -STA -ExecutionPolicy Bypass -File "{script}"'
+
+        class SEI(ctypes.Structure):
+            _fields_ = [("cbSize", wintypes.DWORD), ("fMask", wintypes.ULONG), ("hwnd", wintypes.HWND),
+                        ("lpVerb", wintypes.LPCWSTR), ("lpFile", wintypes.LPCWSTR), ("lpParameters", wintypes.LPCWSTR),
+                        ("lpDirectory", wintypes.LPCWSTR), ("nShow", ctypes.c_int), ("hInstApp", wintypes.HINSTANCE),
+                        ("lpIDList", ctypes.c_void_p), ("lpClass", wintypes.LPCWSTR), ("hkeyClass", wintypes.HKEY),
+                        ("dwHotKey", wintypes.DWORD), ("hIconOrMonitor", wintypes.HANDLE), ("hProcess", wintypes.HANDLE)]
+
+        sei = SEI()
+        sei.cbSize = ctypes.sizeof(SEI)
+        sei.fMask = 0x00000040
+        sei.lpVerb = "runas"
+        sei.lpFile = os.path.join(os.environ.get("SystemRoot", r"C:\\Windows"), "System32", "WindowsPowerShell",
+                                  "v1.0", "powershell.exe")
+        sei.lpParameters = script_arg
+        sei.nShow = 0
+        ctypes.windll.ole32.CoInitializeEx(None, 0x2 | 0x4)
+        shell32 = ctypes.WinDLL("shell32", use_last_error=True)
+        shell32.ShellExecuteExW.argtypes = [ctypes.POINTER(SEI)]
+        shell32.ShellExecuteExW.restype = wintypes.BOOL
+
+        started = bool(shell32.ShellExecuteExW(ctypes.byref(sei)))
+        err = ctypes.get_last_error()
+
+        if not started:
+            if err == 1223:
+                case_drop(cid)
+                raise RuntimeError("Запуск отменён: для чтения журнала Security нужны права администратора")
+            raise OSError(err, ctypes.FormatError(err))
+
+        with _lock:
+            JOBS[jid] = {"id": jid, "state": "waiting", "case": cid, "error": None, "started": time.time()}
+
+        case_stage(cid, "Headless-сборщик запущен: журналы выгружаются…", 0.03,
+                   "Headless-сборщик журналов Windows запущен")
+
+        # Запускаем монитор в фоне (как для GUI, но без handle — ждём появления zip)
+        threading.Thread(target=_watch_headless, args=(jid, out_dir, cid, url), daemon=True, name=f"local-h-{jid}").start()
+        return jid
+
+    finally:
+        # Восстанавливаем окружение (дочерний процесс уже унаследовал)
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+def _watch_headless(jid: str, out_dir: str, cid: str, url: str):
+    """Ждёт zip-архив от headless-сборщика и ставит его на разбор."""
+    t0 = time.time()
+    seen: dict[str, int] = {}
+    try:
+        while time.time() - t0 < WAIT_MAX:
+            if not case_alive(cid):
+                _set(jid, state="closed", error="Сбор удалён")
+                return
+
+            for n in sorted(os.listdir(out_dir)):
+                p = os.path.join(out_dir, n)
+                if not n.lower().endswith(".zip") or not os.path.isfile(p):
+                    continue
+                size = os.path.getsize(p)
+                if seen.get(n) == size and size > 0 and _ready_zip(p):
+                    import_archive(p, case_id=cid)
+                    _set(jid, state="done")
+                    return
+                if n not in seen:
+                    case_stage(cid, "Сборщик упаковывает журналы…", 0.06)
+                seen[n] = size
+
+            if not seen:
+                _set(jid, state="collecting")
+            time.sleep(2)
+
+        _set(jid, state="error", error="Сборщик не закончил работу за 6 часов")
+        case_fail(cid, "Сборщик не закончил работу за 6 часов")
+    except Exception as e:  # noqa: BLE001
+        log.exception("headless collect failed")
+        _set(jid, state="error", error=str(e))
+        case_fail(cid, f"Сбор не удался: {e}")
+    finally:
+        shutil.rmtree(out_dir, ignore_errors=True)
+
+
 def status(jid: str) -> dict | None:
     with _lock:
         j = JOBS.get(jid)

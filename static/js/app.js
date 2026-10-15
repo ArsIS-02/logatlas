@@ -408,6 +408,9 @@ function theme() {
   const cur = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
   document.documentElement.dataset.theme = cur;
   try { localStorage.setItem('la-theme', cur); } catch (e) { /* */ }
+  // Обновить meta theme-color для iOS Safari
+  const meta = document.getElementById('theme-color-meta');
+  if (meta) meta.content = cur === 'light' ? '#f5f5f7' : '#0a0e14';
   route();
 }
 
