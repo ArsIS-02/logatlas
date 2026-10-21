@@ -80,7 +80,7 @@ if ($PanelHost -notmatch '^\d+\.\d+\.\d+\.\d+$') {
   try { $PanelIp = ([Net.Dns]::GetHostAddresses($PanelHost) | Where-Object { $_.AddressFamily -eq 'InterNetwork' } | Select-Object -First 1).IPAddressToString } catch { $PanelIp = $null }
   if (-not $PanelIp) { Say "Не удалось узнать IP панели $PanelHost." 'Red'; return }
 }
-$From = "$PanelIp,172.16.0.0/12,127.0.0.1"
+$From = "$PanelIp,@@PANEL_EXTRA@@172.16.0.0/12,127.0.0.1"
 
 # ------------------------------------------------------------------ OpenSSH Server
 Say 'OpenSSH Server…'

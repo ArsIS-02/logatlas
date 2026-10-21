@@ -247,7 +247,8 @@ def explain(rc: int, err: str, h: dict) -> str:
                     "«Сбросить отпечаток» в карточке хоста.")
         if "permission denied" in low:
             return (f"Ключ панели не принят пользователем {h['user']}. Хост не подготовлен, ключ панели сменился "
-                    "или панель подключается с другого адреса (ограничение from=). Повторите подготовку хоста.")
+                    "или панель подключается с другого адреса (ограничение from=). Повторите подготовку хоста: панель теперь сама "
+                    "определяет свой адрес и подставляет его в команду; в карточке подготовки он показан.")
         if "could not resolve" in low or "name or service not known" in low:
             return f"Имя {h['address']} не находится в DNS — укажите IP-адрес."
         if "connection refused" in low:
@@ -467,7 +468,7 @@ def _b64(name: str) -> str:
     return base64.b64encode(data).decode("ascii")
 
 
-def setup_script(kind: str, base: str, panel_host: str) -> str:
+def setup_script(kind: str, base: str, panel_host: str, extra_from: str = "") -> str:
     key = pubkey()
     if not key:
         raise RuntimeError("Ключ панели ещё не создан")
@@ -483,7 +484,7 @@ def setup_script(kind: str, base: str, panel_host: str) -> str:
         if re.search(r"^'@", text, re.M):
             raise RuntimeError("collect-windows-remote.ps1 нельзя встроить в here-string")
         repl = {"@@COLLECT_WINDOWS_TEXT@@": text}
-    repl.update({"@@BASE@@": base, "@@PANEL_HOST@@": panel_host, "@@PUBKEY@@": key, "@@VERSION@@": COLLECT_VERSION})
+    repl.update({"@@BASE@@": base, "@@PANEL_HOST@@": panel_host, "@@PANEL_EXTRA@@": extra_from, "@@PUBKEY@@": key, "@@VERSION@@": COLLECT_VERSION})
     for k, v in repl.items():
         t = t.replace(k, v)
     if kind == "windows":

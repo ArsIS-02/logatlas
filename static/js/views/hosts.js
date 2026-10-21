@@ -121,7 +121,7 @@ export async function renderHosts(view) {
         <div class="cmdline"><code>${info.commands.windows_remove}</code>${copyBtn(info.commands.windows_remove)}</div>
         <p class="muted small-t">Открытый ключ панели (лежит в <span class="mono">data/keys/</span>):</p>
         <div class="cmdline"><code>${info.pubkey || 'ещё не создан'}</code>${info.pubkey ? copyBtn(info.pubkey) : ''}</div>
-        <p class="muted small-t">Адрес панели в командах — ${info.panel_host || '?'}: с него хост разрешит вход. Если хосты видят панель под другим адресом, откройте панель по нему и скопируйте команду заново.</p>
+        <p class="muted small-t">Хост разрешит вход с адресов: ${[info.panel_host].concat(info.panel_sources || []).filter(Boolean).join(', ') || '?'} (панель сама определяет, под каким адресом её видят хосты). Если подключение всё равно отклоняется, добавьте адрес панели в команду: <span class="mono">sudo PANEL_IP=192.168.x.x bash</span> — или задайте <span class="mono">LOGATLAS_PANEL_IPS</span> в настройках контейнера.</p>
       </details>
     </section>`);
   bindCopy(view);

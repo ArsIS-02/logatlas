@@ -484,6 +484,77 @@ def _lan_ip() -> str:
         s.close()
 
 
+def _peer_ip(req: Request) -> str:
+    """Адрес, с которого пришёл запрос. За обратным прокси (Caddy, nginx) это последний адрес из X-Forwarded-For."""
+    xff = (req.headers.get("x-forwarded-for") or "").split(",")[-1].strip()
+    return xff or (req.client.host if req.client else "")
+
+
+def whoami(req):
+    return J({"ip": _peer_ip(req)})
+
+
+def _ipv4(v: str) -> str:
+    import ipaddress
+    try:
+        return str(ipaddress.IPv4Address((v or "").strip()))
+    except ValueError:
+        return ""
+
+
+_EGRESS: dict = {}
+
+
+def _learn_egress(base: str) -> str:
+    """Под каким адресом панель видна в локальной сети. Панель в контейнере с NAT (docker bridge, podman) ходит на
+    хосты с адресом своего компьютера, а не контейнера и не прокси, и узнать его изнутри нельзя. Поэтому панель
+    открывает собственный адрес из браузера (через тот же прокси) и смотрит, каким её увидели."""
+    if not base:
+        return ""
+    hit = _EGRESS.get(base)
+    if hit and time.time() - hit[0] < 300:
+        return hit[1]
+    import ssl
+    import urllib.request
+    ip = ""
+    try:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE   # только чтение собственного адреса, внутренний CA прокси в контейнере не известен
+        op = urllib.request.build_opener(urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(context=ctx))
+        with op.open(urllib.request.Request(f"{base}/api/whoami", headers={"Accept": "application/json"}), timeout=4) as r:
+            ip = _ipv4(json.loads(r.read(2000).decode("utf-8", "replace")).get("ip", ""))
+    except Exception:
+        ip = ""
+    _EGRESS[base] = (time.time(), ip)
+    return ip
+
+
+def _route_src(dest: str) -> str:
+    """С какого своего адреса панель дойдёт до dest (UDP connect пакетов не отправляет)."""
+    import socket
+    if not _ipv4(dest):
+        return ""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect((dest, 9))
+        return _ipv4(s.getsockname()[0])
+    except OSError:
+        return ""
+    finally:
+        s.close()
+
+
+def _panel_sources(req: Request) -> list:
+    """Адреса, с которых панель может прийти на хост (в from= ключа), кроме адреса из ссылки на панель."""
+    out = []
+    for ip in [_learn_egress(_base(req)), _route_src(_peer_ip(req))] + os.environ.get("LOGATLAS_PANEL_IPS", "").replace(";", ",").split(","):
+        ip = _ipv4(ip)
+        if ip and not ip.startswith("127.") and ip not in out:
+            out.append(ip)
+    return out
+
+
 def _script_panel_host(req: Request) -> str:
     """Адрес панели для ограничения from= в скрипте подготовки. Панель открыта как 127.0.0.1 (LogAtlas для
     Windows или запуск из исходников) — хост увидит её под адресом в локальной сети, его и подставляем."""
@@ -508,7 +579,7 @@ def collect_info(req):
     return J({
         "available": collect.available(), "pubkey": collect.pubkey(), "user": collect.DEFAULT_USER,
         "unavailable": collect.NO_SSH,
-        "panel_host": _script_panel_host(req), "base": base, "local_only": _local_only(req),
+        "panel_host": _script_panel_host(req), "panel_sources": _panel_sources(req), "base": base, "local_only": _local_only(req),
         "commands": {
             "unix": f"curl -fsSL {base}/setup/host.sh | sudo bash",
             "unix_remove": f"curl -fsSL {base}/setup/host.sh | sudo bash -s -- --remove",
@@ -524,7 +595,8 @@ def setup_script(req):
     if kind not in ("host.sh", "windows.ps1"):
         return Response("not found", status_code=404)
     try:
-        text = collect.setup_script("host" if kind == "host.sh" else "windows", _base(req), _script_panel_host(req))
+        text = collect.setup_script("host" if kind == "host.sh" else "windows", _base(req), _script_panel_host(req),
+                                  "".join(ip + "," for ip in _panel_sources(req)))
     except (OSError, RuntimeError) as e:
         return Response(f"echo 'LogAtlas: {e}'\n", media_type="text/plain; charset=utf-8", status_code=503)
     headers = {"Cache-Control": "no-store"}
@@ -955,6 +1027,7 @@ routes = [
     Route("/api/inbox/import", inbox_import, methods=["POST"]),
     Route("/api/local/collect", local_collect, methods=["POST"]),
     Route("/api/local/collect/{jid}", local_collect_status),
+    Route("/api/whoami", whoami),
     Route("/api/collect/info", collect_info),
     Route("/api/collect", collect_start, methods=["POST"]),
     Route("/api/hosts", hosts_list, methods=["GET"]),
