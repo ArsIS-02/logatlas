@@ -19,7 +19,7 @@ BEGIN
       VALUE "FileDescription", "LogAtlas"
       VALUE "FileVersion", LOGATLAS_VERSION_STR
       VALUE "InternalName", "LogAtlas"
-      VALUE "LegalCopyright", "MIT License"
+      VALUE "LegalCopyright", "GPL-3.0 License"
       VALUE "OriginalFilename", "LogAtlas.exe"
       VALUE "ProductName", "LogAtlas"
       VALUE "ProductVersion", LOGATLAS_VERSION_STR

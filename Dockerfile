@@ -45,7 +45,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \
 LABEL org.opencontainers.image.title="LogAtlas" \
       org.opencontainers.image.description="Анализатор журналов macOS, Windows и Linux" \
       org.opencontainers.image.source="https://github.com/ArsIS-02/logatlas" \
-      org.opencontainers.image.licenses="MIT"
+      org.opencontainers.image.licenses="GPL-3.0-or-later"
 
 ENTRYPOINT ["/usr/local/bin/logatlas-entrypoint"]
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8484", "--timeout-keep-alive", "30"]

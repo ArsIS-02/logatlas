@@ -18,7 +18,7 @@
   <key>LSMinimumSystemVersion</key><string>12.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
-  <key>NSHumanReadableCopyright</key><string>MIT License · github.com/ArsIS-02/logatlas</string>
+  <key>NSHumanReadableCopyright</key><string>GPL-3.0 License · github.com/ArsIS-02/logatlas</string>
   <key>NSAppTransportSecurity</key>
   <dict>
     <key>NSAllowsLocalNetworking</key><true/>

@@ -19,7 +19,7 @@
   <img alt="Architectures" src="https://img.shields.io/badge/arch-arm64%20%7C%20amd64-5f7f99">
   <img alt="Logs" src="https://img.shields.io/badge/logs-macOS%20%7C%20Windows%20%7C%20Linux-8cc3d4">
   <img alt="Offline" src="https://img.shields.io/badge/works-offline-6f8296">
-  <img alt="License" src="https://img.shields.io/badge/license-MIT-d4b06a">
+  <img alt="License" src="https://img.shields.io/badge/license-GPL--3.0-d4b06a">
 </p>
 
 <p align="center">
@@ -503,4 +503,4 @@ logatlas/
 
 ## Лицензия
 
-[MIT](LICENSE). Сторонние компоненты и их лицензии перечислены в [THIRD_PARTY.txt](THIRD_PARTY.txt).
+[GPL-3.0](LICENSE). Сторонние компоненты и их лицензии перечислены в [THIRD_PARTY.txt](THIRD_PARTY.txt).
