@@ -210,6 +210,16 @@ const EN = {
   'сбора': 'cases', 'сборов': 'cases', 'процессов': 'processes', 'объектов': 'objects',
   'категории': 'categories', 'категориям': 'categories', 'события отнесены': 'events matched',
   'событие отнесено': 'event matched', 'событий отнесены': 'events matched', 'Событий': 'Events',
+  // Graylog
+  'Отправить находки в Graylog': 'Send findings to Graylog',
+  'критичные и высокие': 'critical and high',
+  'от средних': 'medium and above',
+  'от низких': 'low and above',
+  'все': 'all',
+  'Отправка…': 'Sending…',
+  'Подходящих находок нет.': 'No matching findings.',
+  'Скачать правило Sigma': 'Download Sigma rule',
+  'Исходное правило Sigma — например, для sigma2graylog, чтобы сделать из него постоянный детект в Graylog': 'Original Sigma rule — e.g. for sigma2graylog, to turn it into a permanent Graylog detection',
 };
 
 let LANG = 'ru';

@@ -24,3 +24,6 @@ services:
       - HTTPS_PROXY=${HTTPS_PROXY:-}
       - NO_PROXY=${NO_PROXY:-}
       - LOGATLAS_SIGMA_UPDATE=${LOGATLAS_SIGMA_UPDATE:-1}   # 0 — без загрузки правил из сети
+      # находки в Graylog по кнопке «Отправить находки в Graylog»; пусто — выключено (README, «Находки в Graylog»)
+      - LOGATLAS_GELF_HOST=${LOGATLAS_GELF_HOST:-}
+      - LOGATLAS_GELF_PORT=${LOGATLAS_GELF_PORT:-12201}

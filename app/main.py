@@ -21,7 +21,7 @@ from starlette.responses import FileResponse, JSONResponse, Response, StreamingR
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from . import analytics, collect, compare, coverage, db, detections, ingest, maclocal, mitre, sigma, winlocal
+from . import analytics, collect, compare, coverage, db, detections, gelf, ingest, maclocal, mitre, sigma, winlocal
 from .parsers import SUPPORTED
 from .parsers.base import CATEGORIES
 from .i18n import CATEGORIES_EN, lang_of
@@ -734,6 +734,61 @@ async def sigma_import(req: Request):
     return J(rep)
 
 
+def graylog_info(req):
+    snd = gelf.SENDER
+    if not snd:
+        return J({"enabled": False})
+    return J({"enabled": True, "target": "%s:%d/%s" % (snd.host, snd.port, snd.proto), **snd.status})
+
+
+async def graylog_send(req: Request):
+    """Находки сбора → Graylog: по сообщению на правило. Только по кнопке и только при заданном адресе."""
+    snd = gelf.SENDER
+    if not snd:
+        return _err("Отправка в Graylog выключена: задайте LOGATLAS_GELF_HOST")
+    cid = req.path_params["cid"]
+    case = db.get_case(cid)
+    if not case:
+        return _err("Сбор не найден", 404)
+    if not os.path.exists(db.case_path(cid)):
+        return _err("Данные сбора ещё не готовы", 409)
+    try:
+        body = await req.json()
+    except ValueError:
+        body = {}
+    min_sev = str(body.get("min_severity") or "low")
+    t0, t1 = _rng(req)
+
+    def work():
+        con = db.case_db(cid)
+        try:
+            found = analytics.findings_summary(con, t0, t1, "ru")
+            msgs = gelf.finding_messages(dict(case), found,
+                                         lambda rid: analytics.finding_detail(con, rid, t0, t1, limit=1)["groups"], min_sev)
+        finally:
+            con.close()
+        for short, fields, level in msgs:
+            snd.send_now(gelf.message(short, fields, snd.source, level))
+        return len(msgs)
+    try:
+        n = await run_in_threadpool(work)
+    except (OSError, ValueError) as e:
+        return _err("Graylog недоступен: %s" % e, 502)
+    snd.status["sent"] += n
+    snd.status["last_ok"] = time.time()
+    return J({"sent": n})
+
+
+def sigma_yaml(req):
+    """Исходный YAML импортированного правила Sigma — например, чтобы превратить его в детект через sigma2graylog."""
+    r = sigma.get_rule(req.path_params["rid"])
+    if not r or not r.get("yaml"):
+        return _err("Правило не найдено", 404)
+    name = re.sub(r"[^A-Za-z0-9._-]+", "_", r["id"].removeprefix("sigma:"))[:80] or "rule"
+    return Response(r["yaml"], media_type="application/x-yaml; charset=utf-8",
+                    headers={"Content-Disposition": 'attachment; filename="%s.yml"' % name})
+
+
 def sigma_get(req):
     r = sigma.get_rule(req.path_params["rid"])
     return J(r) if r else _err("Правило не найдено", 404)
@@ -1018,6 +1073,9 @@ routes = [
     Route("/api/mitre/update", mitre_update, methods=["POST"]),
     Route("/api/mitre/update", mitre_update_status, methods=["GET"]),
     Route("/api/sigma/rules/{rid}", sigma_get),
+    Route("/api/sigma/rules/{rid}/yaml", sigma_yaml),
+    Route("/api/graylog", graylog_info),
+    Route("/api/cases/{cid}/graylog", graylog_send, methods=["POST"]),
     Route("/api/compare", compare_cases),
     Route("/api/cases/{cid}/compare-candidates", compare_candidates),
     Route("/api/cases/{cid}/baseline", baseline_get, methods=["GET"]),

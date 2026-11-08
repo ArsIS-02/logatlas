@@ -4,7 +4,10 @@ import { $, $$, SEV, catTag, fmtN, fmtTime, h, mount, raw, sevIcon, sevLabel, st
 
 export async function renderFindings(view, ctx) {
   mount(view, h`<div class="loading"><span class="spinner"></span></div>`);
-  const list = await api.get(`/api/cases/${ctx.case.id}/findings`, { from: ctx.from, to: ctx.to });
+  const [list, gl] = await Promise.all([
+    api.get(`/api/cases/${ctx.case.id}/findings`, { from: ctx.from, to: ctx.to }),
+    api.get('/api/graylog').catch(() => ({ enabled: false })),
+  ]);
   const rules = ctx.meta.rules || [];
   const quiet = rules.filter((r) => !list.find((f) => f.id === r.id));
   mount(view, h`
@@ -28,6 +31,13 @@ export async function renderFindings(view, ctx) {
           <div class="btn-row" style="margin-top:10px"><button class="btn primary" type="button" id="ioc-go">Проверить</button><span class="muted" id="ioc-st" style="font-size:12.5px"></span></div>
           <div id="ioc-res" style="margin-top:12px"></div>
         </section>
+        ${gl.enabled && list.length ? h`<section class="panel" style="margin-top:14px">
+          <div class="panel-h"><h2>Graylog</h2></div>
+          <p class="ink2" style="font-size:13px;margin:0 0 10px">Отправить находки этого сбора${ctx.range ? ' за выбранный период' : ''} в Graylog (${gl.target}): по сообщению на правило — хост, правило, важность, техника ATT&CK, число событий, первое и последнее срабатывание.</p>
+          <div class="btn-row"><select class="field" id="gl-sev" style="width:auto"><option value="high">критичные и высокие</option><option value="medium">от средних</option><option value="low" selected>от низких</option><option value="info">все</option></select>
+          <button class="btn" type="button" id="gl-go">Отправить находки в Graylog</button></div>
+          <div class="muted" id="gl-st" style="font-size:12.5px;margin-top:8px"></div>
+        </section>` : ''}
       </aside>
     </div>`);
 
@@ -45,11 +55,29 @@ export async function renderFindings(view, ctx) {
       </tbody></table></div>
       <div class="btn-row" style="margin-top:10px">
         <button class="btn small" type="button" data-search="rule:${rule}">Открыть в поиске</button>
+        ${rule.startsWith('sigma:') ? h`<a class="btn small" href="/api/sigma/rules/${encodeURIComponent(rule)}/yaml" download title="Исходное правило Sigma — например, для sigma2graylog, чтобы сделать из него постоянный детект в Graylog">Скачать правило Sigma</a>` : ''}
         ${d.events.length >= 200 ? h`<span class="muted" style="font-size:12px">Показаны последние 200 событий</span>` : ''}
       </div>`);
     $$('tr[data-id]', body).forEach((tr) => tr.addEventListener('click', () => ctx.openEvent(+tr.dataset.id)));
     $$('[data-search]', body).forEach((b) => b.addEventListener('click', () => ctx.search(b.dataset.search)));
     $$('[data-g]', body).forEach((b) => b.addEventListener('click', () => ctx.search(`rule:${rule} "${b.dataset.g.replace(/"/g, '')}"`)));
+  }
+  const glGo = $('#gl-go', view);
+  if (glGo) {
+    glGo.addEventListener('click', async () => {
+      glGo.disabled = true;
+      const st = $('#gl-st', view);
+      st.textContent = 'Отправка…';
+      try {
+        const r = await api.post(`/api/cases/${ctx.case.id}/graylog${ctx.from ? `?from=${ctx.from}&to=${ctx.to}` : ''}`, { min_severity: $('#gl-sev', view).value });
+        st.textContent = r.sent ? `Отправлено сообщений: ${r.sent}. В Graylog: la_case:${ctx.case.id}` : 'Подходящих находок нет.';
+      } catch (e) {
+        st.textContent = '';
+        toast(e.message);
+      } finally {
+        glGo.disabled = false;
+      }
+    });
   }
   $$('details.finding', view).forEach((det) => {
     det.addEventListener('toggle', () => { if (det.open) loadRule(det); });
